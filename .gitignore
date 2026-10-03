@@ -1,0 +1,4 @@
+# Runtime artifacts created by the app
+savedconnections.xml.tmp
+savedconnections.xml.backup_*
+savedconnections.xml.corrupt_*
