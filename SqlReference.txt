@@ -1,0 +1,2314 @@
+# SQL Server (T-SQL) reference data for SqlReference.ps1
+#
+# Add your own entries at the end of any category - the app reads this file at startup.
+#
+# Format (one entry):
+#   === Category | Name | Since            <- "Since" is optional, e.g. 2017+
+#   Summary: one line describing what it does
+#   Syntax:
+#   ...lines...
+#   Example:
+#   ...lines...
+#   Notes: optional text (may continue on following lines)
+#   See also: Name1, Name2
+#
+# Lines starting with # are comments only here, before the first "===" line.
+
+=== Query (SELECT) | SELECT
+Summary: Reads rows from one or more tables or views.
+Syntax:
+SELECT [ALL | DISTINCT] [TOP (n) [PERCENT] [WITH TIES]]
+       column_or_expression [AS alias] [, ...n]
+FROM   table_or_view [AS alias]
+[WHERE condition]
+[GROUP BY column [, ...n]]
+[HAVING condition]
+[ORDER BY column [ASC | DESC] [, ...n]];
+Example:
+SELECT e.FirstName, e.LastName, e.Salary
+FROM   dbo.Employees AS e
+WHERE  e.Salary > 50000
+ORDER BY e.LastName;
+Notes: Logical processing order: FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY - which is why a SELECT alias cannot be used in WHERE. Avoid SELECT * in production code; list the columns you need.
+See also: WHERE, ORDER BY, GROUP BY, TOP
+
+=== Query (SELECT) | TOP
+Summary: Limits the number of rows returned.
+Syntax:
+SELECT TOP (n) [PERCENT] [WITH TIES] columns
+FROM   table
+ORDER BY column;
+Example:
+SELECT TOP (10) OrderId, Total
+FROM   dbo.Orders
+ORDER BY Total DESC;
+
+-- Include rows tied with the 10th value
+SELECT TOP (10) WITH TIES OrderId, Total
+FROM   dbo.Orders
+ORDER BY Total DESC;
+Notes: Always pair TOP with ORDER BY, otherwise the rows returned are not guaranteed. WITH TIES requires ORDER BY. For paging use OFFSET FETCH.
+See also: OFFSET FETCH, ORDER BY
+
+=== Query (SELECT) | DISTINCT
+Summary: Removes duplicate rows from the result.
+Syntax:
+SELECT DISTINCT column1 [, column2 ...]
+FROM   table;
+Example:
+SELECT DISTINCT Country, City
+FROM   dbo.Customers;
+Notes: Applies to the whole row, not just the first column. NULLs are treated as equal to each other.
+See also: GROUP BY, COUNT
+
+=== Query (SELECT) | WHERE
+Summary: Filters rows before grouping.
+Syntax:
+WHERE condition [AND | OR condition ...]
+
+Comparison:  =  <>  !=  <  >  <=  >=
+Other:       BETWEEN, IN, LIKE, IS NULL, EXISTS, NOT
+Example:
+SELECT *
+FROM   dbo.Orders
+WHERE  Status = 'Open'
+  AND (Total >= 1000 OR Priority = 1)
+  AND ShippedOn IS NULL;
+Notes: Use IS NULL / IS NOT NULL - never = NULL. AND is evaluated before OR; use parentheses to be explicit. Wrapping a column in a function (WHERE YEAR(d) = 2024) prevents index seeks; compare against a range instead.
+See also: LIKE, IN, BETWEEN, IS NULL
+
+=== Query (SELECT) | ORDER BY
+Summary: Sorts the result.
+Syntax:
+ORDER BY expression [ASC | DESC] [, ...n]
+Example:
+SELECT LastName, FirstName, HiredOn
+FROM   dbo.Employees
+ORDER BY LastName ASC, HiredOn DESC;
+
+-- Sort by column position or alias
+SELECT LastName, Salary * 12 AS Annual FROM dbo.Employees ORDER BY Annual DESC;
+Notes: ASC is the default. NULLs sort first in ascending order. ORDER BY is not allowed in views or derived tables unless TOP or OFFSET is used.
+See also: TOP, OFFSET FETCH
+
+=== Query (SELECT) | OFFSET FETCH | 2012+
+Summary: Paging - skip rows and return the next page.
+Syntax:
+ORDER BY column [, ...]
+OFFSET offset_rows ROWS
+FETCH NEXT page_rows ROWS ONLY
+Example:
+DECLARE @Page int = 3, @PageSize int = 20;
+
+SELECT OrderId, OrderDate
+FROM   dbo.Orders
+ORDER BY OrderDate DESC, OrderId
+OFFSET (@Page - 1) * @PageSize ROWS
+FETCH NEXT @PageSize ROWS ONLY;
+Notes: Requires ORDER BY. Add a unique column to the ORDER BY so pages are stable.
+See also: TOP, ORDER BY
+
+=== Query (SELECT) | GROUP BY
+Summary: Groups rows so aggregate functions work per group.
+Syntax:
+SELECT group_columns, aggregate(...)
+FROM   table
+GROUP BY group_columns
+[HAVING condition];
+
+-- Subtotals
+GROUP BY ROLLUP (a, b)
+GROUP BY CUBE (a, b)
+GROUP BY GROUPING SETS ((a), (b), ())
+Example:
+SELECT DepartmentId, COUNT(*) AS Employees, AVG(Salary) AS AvgSalary
+FROM   dbo.Employees
+GROUP BY DepartmentId;
+Notes: Every non-aggregated column in SELECT must appear in GROUP BY. Filter rows with WHERE and filter groups with HAVING.
+See also: HAVING, COUNT, SUM
+
+=== Query (SELECT) | HAVING
+Summary: Filters groups after aggregation.
+Syntax:
+GROUP BY columns
+HAVING aggregate_condition
+Example:
+SELECT CustomerId, SUM(Total) AS Spent
+FROM   dbo.Orders
+GROUP BY CustomerId
+HAVING SUM(Total) > 10000;
+Notes: Conditions that do not use aggregates belong in WHERE (they run earlier and are cheaper).
+See also: GROUP BY, WHERE
+
+=== Query (SELECT) | LIKE
+Summary: Pattern matching on strings.
+Syntax:
+column [NOT] LIKE 'pattern' [ESCAPE 'char']
+
+%      any string (including empty)
+_      exactly one character
+[abc]  one character from the set
+[a-f]  one character from the range
+[^abc] one character NOT in the set
+Example:
+SELECT * FROM dbo.Customers WHERE LastName LIKE 'Sm%';      -- starts with Sm
+SELECT * FROM dbo.Customers WHERE Email LIKE '%@%.com';     -- contains @ and ends .com
+SELECT * FROM dbo.Products  WHERE Code LIKE '[A-C]_[0-9]%'; -- A-C, any char, a digit...
+SELECT * FROM dbo.Notes     WHERE Txt LIKE '%50\%%' ESCAPE '\'; -- literal %
+Notes: A leading wildcard ('%abc') cannot use an index seek. Case sensitivity depends on the column collation.
+See also: PATINDEX, CHARINDEX
+
+=== Query (SELECT) | IN
+Summary: Matches any value in a list or subquery.
+Syntax:
+expression [NOT] IN (value1, value2, ...)
+expression [NOT] IN (subquery)
+Example:
+SELECT * FROM dbo.Orders WHERE Status IN ('Open', 'Pending');
+SELECT * FROM dbo.Customers
+WHERE  CustomerId IN (SELECT CustomerId FROM dbo.Orders WHERE Total > 5000);
+Notes: NOT IN returns no rows if the list or subquery contains a NULL. Prefer NOT EXISTS when NULLs are possible.
+See also: EXISTS, BETWEEN
+
+=== Query (SELECT) | BETWEEN
+Summary: Range test, inclusive at both ends.
+Syntax:
+expression [NOT] BETWEEN low AND high
+Example:
+SELECT * FROM dbo.Products WHERE Price BETWEEN 10 AND 20;
+
+-- For dates / datetimes prefer a half-open range
+SELECT * FROM dbo.Orders
+WHERE  OrderDate >= '2024-03-01' AND OrderDate < '2024-04-01';
+Notes: BETWEEN '2024-03-01' AND '2024-03-31' misses rows on March 31 that have a time part. Use >= and < instead.
+See also: WHERE
+
+=== Query (SELECT) | IS NULL
+Summary: Tests for missing (NULL) values.
+Syntax:
+expression IS [NOT] NULL
+Example:
+SELECT * FROM dbo.Employees WHERE ManagerId IS NULL;
+SELECT * FROM dbo.Employees WHERE ManagerId IS NOT NULL;
+Notes: NULL = NULL is not true. Comparisons with NULL return UNKNOWN, so those rows are filtered out. SQL Server 2022 also adds IS [NOT] DISTINCT FROM, which treats NULLs as comparable.
+See also: ISNULL, COALESCE, NULLIF
+
+=== Query (SELECT) | EXISTS
+Summary: True when a subquery returns at least one row.
+Syntax:
+[NOT] EXISTS (SELECT 1 FROM ... WHERE ...)
+Example:
+-- Customers that have at least one order
+SELECT c.CustomerId, c.Name
+FROM   dbo.Customers AS c
+WHERE  EXISTS (SELECT 1 FROM dbo.Orders AS o WHERE o.CustomerId = c.CustomerId);
+
+-- Customers without orders
+SELECT c.CustomerId, c.Name
+FROM   dbo.Customers AS c
+WHERE  NOT EXISTS (SELECT 1 FROM dbo.Orders AS o WHERE o.CustomerId = c.CustomerId);
+Notes: What the subquery selects does not matter - EXISTS only checks for rows. Safer than NOT IN when NULLs are possible.
+See also: IN, LEFT JOIN
+
+=== Query (SELECT) | CASE
+Summary: Conditional expression (IF/ELSE inside a query).
+Syntax:
+-- Searched
+CASE WHEN condition THEN result [WHEN ... THEN ...] [ELSE result] END
+-- Simple
+CASE expression WHEN value THEN result [WHEN ...] [ELSE result] END
+Example:
+SELECT OrderId,
+       Total,
+       CASE WHEN Total >= 1000 THEN 'Large'
+            WHEN Total >= 100  THEN 'Medium'
+            ELSE 'Small'
+       END AS Size
+FROM dbo.Orders;
+
+-- Conditional aggregation
+SELECT SUM(CASE WHEN Status = 'Open' THEN 1 ELSE 0 END) AS OpenOrders
+FROM dbo.Orders;
+Notes: Branches are evaluated in order; the first match wins. Without ELSE the result is NULL. All results must be compatible types.
+See also: IIF, CHOOSE, COALESCE
+
+=== Query (SELECT) | WITH (CTE)
+Summary: Common table expression - a named, temporary result set (also used for recursion).
+Syntax:
+WITH cte_name [(column_list)] AS (
+    SELECT ...
+)
+SELECT ... FROM cte_name;
+
+-- Recursive
+WITH cte AS (
+    SELECT ...                      -- anchor
+    UNION ALL
+    SELECT ... FROM table JOIN cte ON ...   -- recursive member
+)
+SELECT * FROM cte OPTION (MAXRECURSION 100);
+Example:
+-- Org chart: every employee with their depth
+WITH Org AS (
+    SELECT EmployeeId, ManagerId, Name, 0 AS Depth
+    FROM   dbo.Employees WHERE ManagerId IS NULL
+    UNION ALL
+    SELECT e.EmployeeId, e.ManagerId, e.Name, o.Depth + 1
+    FROM   dbo.Employees AS e
+    JOIN   Org AS o ON o.EmployeeId = e.ManagerId
+)
+SELECT * FROM Org ORDER BY Depth, Name;
+Notes: The statement before WITH must end with a semicolon. A CTE is not materialized - it is expanded like a view each time it is referenced. The default recursion limit is 100.
+See also: UNION ALL, ROW_NUMBER
+
+=== Query (SELECT) | PIVOT
+Summary: Turns row values into columns.
+Syntax:
+SELECT non_pivoted_columns, [value1], [value2], ...
+FROM (source_query) AS src
+PIVOT (
+    aggregate(value_column)
+    FOR pivot_column IN ([value1], [value2], ...)
+) AS pvt;
+Example:
+SELECT ProductId, [2023], [2024]
+FROM (SELECT ProductId, YEAR(OrderDate) AS Yr, Quantity FROM dbo.Sales) AS src
+PIVOT (SUM(Quantity) FOR Yr IN ([2023], [2024])) AS pvt;
+Notes: The IN list must be fixed; for dynamic columns build the statement with sp_executesql. UNPIVOT does the reverse.
+See also: GROUP BY, sp_executesql
+
+=== Query (SELECT) | CROSS APPLY / OUTER APPLY
+Summary: Runs a table-valued expression for each row of the left side.
+Syntax:
+FROM left_table AS l
+CROSS APPLY  (subquery_or_function(l.col)) AS r   -- like INNER JOIN
+OUTER APPLY  (subquery_or_function(l.col)) AS r   -- like LEFT JOIN
+Example:
+-- Latest 3 orders per customer
+SELECT c.CustomerId, c.Name, o.OrderId, o.OrderDate
+FROM   dbo.Customers AS c
+CROSS APPLY (
+    SELECT TOP (3) OrderId, OrderDate
+    FROM   dbo.Orders
+    WHERE  CustomerId = c.CustomerId
+    ORDER BY OrderDate DESC
+) AS o;
+Notes: Use OUTER APPLY to keep left rows that have no match. Handy for "top N per group" and for calling table-valued functions.
+See also: JOIN, ROW_NUMBER
+
+=== Query (SELECT) | Table hints (NOLOCK...)
+Summary: Overrides locking or index choice for one table in a query.
+Syntax:
+FROM table [AS alias] WITH (hint [, ...])
+
+NOLOCK / READUNCOMMITTED   read without shared locks (dirty reads)
+UPDLOCK                    take update locks while reading
+HOLDLOCK / SERIALIZABLE    keep range locks until end of transaction
+READPAST                   skip locked rows
+ROWLOCK / TABLOCK          choose lock granularity
+INDEX (index_name)         force an index
+Example:
+SELECT COUNT(*) FROM dbo.AuditLog WITH (NOLOCK);
+
+-- Queue pattern: take the next unlocked row
+SELECT TOP (1) * FROM dbo.Jobs WITH (UPDLOCK, READPAST, ROWLOCK)
+WHERE Status = 'New' ORDER BY JobId;
+Notes: NOLOCK can return uncommitted, duplicated or missing rows - avoid it for anything that must be correct. Prefer READ_COMMITTED_SNAPSHOT or SNAPSHOT isolation.
+See also: SET TRANSACTION ISOLATION LEVEL
+
+=== Joins & set operators | INNER JOIN
+Summary: Returns rows that match in both tables.
+Syntax:
+SELECT columns
+FROM   table_a AS a
+INNER JOIN table_b AS b ON a.key = b.key;
+Example:
+SELECT o.OrderId, c.Name, o.Total
+FROM   dbo.Orders AS o
+INNER JOIN dbo.Customers AS c ON c.CustomerId = o.CustomerId;
+Notes: INNER is optional - JOIN alone means INNER JOIN. Rows without a match on either side disappear.
+See also: LEFT JOIN, CROSS JOIN
+
+=== Joins & set operators | LEFT JOIN
+Summary: All rows from the left table, plus matches from the right (NULL when none).
+Syntax:
+FROM   table_a AS a
+LEFT [OUTER] JOIN table_b AS b ON a.key = b.key
+Example:
+-- Customers and their orders (customers with no orders show NULLs)
+SELECT c.Name, o.OrderId
+FROM   dbo.Customers AS c
+LEFT JOIN dbo.Orders AS o ON o.CustomerId = c.CustomerId;
+
+-- Only customers WITHOUT orders
+SELECT c.Name
+FROM   dbo.Customers AS c
+LEFT JOIN dbo.Orders AS o ON o.CustomerId = c.CustomerId
+WHERE  o.OrderId IS NULL;
+Notes: A condition on the right table in WHERE turns the LEFT JOIN into an INNER JOIN - put it in the ON clause instead. RIGHT JOIN is the mirror image.
+See also: INNER JOIN, EXISTS
+
+=== Joins & set operators | RIGHT JOIN
+Summary: All rows from the right table, plus matches from the left.
+Syntax:
+FROM   table_a AS a
+RIGHT [OUTER] JOIN table_b AS b ON a.key = b.key
+Example:
+SELECT d.Name AS Department, e.LastName
+FROM   dbo.Employees AS e
+RIGHT JOIN dbo.Departments AS d ON d.DepartmentId = e.DepartmentId;
+Notes: Most people rewrite this as a LEFT JOIN with the tables swapped, which is easier to read.
+See also: LEFT JOIN
+
+=== Joins & set operators | FULL OUTER JOIN
+Summary: All rows from both tables, matched where possible.
+Syntax:
+FROM   table_a AS a
+FULL [OUTER] JOIN table_b AS b ON a.key = b.key
+Example:
+SELECT COALESCE(a.Id, b.Id) AS Id, a.Name AS NameA, b.Name AS NameB
+FROM   dbo.SourceA AS a
+FULL OUTER JOIN dbo.SourceB AS b ON a.Id = b.Id
+WHERE  a.Id IS NULL OR b.Id IS NULL;     -- rows present on only one side
+Notes: Useful for comparing two tables.
+See also: LEFT JOIN, EXCEPT
+
+=== Joins & set operators | CROSS JOIN
+Summary: Every row of A combined with every row of B (Cartesian product).
+Syntax:
+FROM table_a CROSS JOIN table_b
+Example:
+-- Every size in every color
+SELECT s.Size, c.Color
+FROM   dbo.Sizes AS s
+CROSS JOIN dbo.Colors AS c;
+Notes: Result size is rows(A) x rows(B). A missing join condition in an old-style comma join does this by accident.
+See also: INNER JOIN
+
+=== Joins & set operators | Self join
+Summary: Joins a table to itself (for example employee to manager).
+Syntax:
+FROM table AS child
+JOIN table AS parent ON child.parent_id = parent.id
+Example:
+SELECT e.Name AS Employee, m.Name AS Manager
+FROM   dbo.Employees AS e
+LEFT JOIN dbo.Employees AS m ON m.EmployeeId = e.ManagerId;
+Notes: Aliases are required so the two copies can be told apart.
+See also: LEFT JOIN, WITH (CTE)
+
+=== Joins & set operators | UNION / UNION ALL
+Summary: Stacks the results of two or more queries.
+Syntax:
+query1
+UNION [ALL]
+query2
+Example:
+SELECT Email FROM dbo.Customers
+UNION
+SELECT Email FROM dbo.Suppliers;       -- removes duplicates
+
+SELECT 'C' AS Src, Name FROM dbo.Customers
+UNION ALL
+SELECT 'S', Name FROM dbo.Suppliers;   -- keeps everything, faster
+Notes: Queries need the same number of columns with compatible types; column names come from the first query. UNION sorts/deduplicates, so use UNION ALL when duplicates cannot occur. ORDER BY goes at the very end.
+See also: INTERSECT, EXCEPT
+
+=== Joins & set operators | INTERSECT
+Summary: Rows that appear in both queries.
+Syntax:
+query1
+INTERSECT
+query2
+Example:
+SELECT CustomerId FROM dbo.Orders2023
+INTERSECT
+SELECT CustomerId FROM dbo.Orders2024;   -- customers who ordered in both years
+Notes: Duplicates are removed. NULLs are treated as equal.
+See also: UNION / UNION ALL, EXCEPT
+
+=== Joins & set operators | EXCEPT
+Summary: Rows from the first query that are not in the second.
+Syntax:
+query1
+EXCEPT
+query2
+Example:
+SELECT CustomerId FROM dbo.Orders2023
+EXCEPT
+SELECT CustomerId FROM dbo.Orders2024;   -- ordered in 2023 but not in 2024
+Notes: Order matters (A EXCEPT B is not B EXCEPT A). Duplicates are removed.
+See also: INTERSECT, EXISTS
+
+=== Data modification | INSERT
+Summary: Adds rows to a table.
+Syntax:
+INSERT INTO table (column1, column2, ...)
+VALUES (value1, value2, ...) [, (value1, value2, ...) ...];
+
+INSERT INTO table (column1, column2, ...)
+SELECT ... ;
+Example:
+INSERT INTO dbo.Employees (FirstName, LastName, Salary)
+VALUES (N'Ana', N'Silva', 2500),
+       (N'Rui', N'Costa', 2700);
+
+INSERT INTO dbo.EmployeesArchive (EmployeeId, LastName)
+SELECT EmployeeId, LastName FROM dbo.Employees WHERE Active = 0;
+Notes: Always list the columns. A single VALUES list accepts up to 1000 rows. Identity and computed columns are skipped automatically.
+See also: SELECT INTO, OUTPUT, SET IDENTITY_INSERT
+
+=== Data modification | UPDATE
+Summary: Changes existing rows.
+Syntax:
+UPDATE table_or_alias
+SET    column1 = value1 [, column2 = value2 ...]
+[FROM  join_sources]
+[WHERE condition];
+Example:
+UPDATE dbo.Employees
+SET    Salary = Salary * 1.05,
+       ModifiedAt = SYSDATETIME()
+WHERE  DepartmentId = 3;
+
+-- Using values from another table
+UPDATE e
+SET    e.DepartmentName = d.Name
+FROM   dbo.Employees AS e
+JOIN   dbo.Departments AS d ON d.DepartmentId = e.DepartmentId;
+Notes: Without WHERE every row is updated. Run the same WHERE as a SELECT first, and wrap risky updates in a transaction. Use the alias after UPDATE when the statement has a FROM clause.
+See also: DELETE, MERGE, OUTPUT, BEGIN TRANSACTION
+
+=== Data modification | DELETE
+Summary: Removes rows.
+Syntax:
+DELETE [FROM] table_or_alias
+[FROM join_sources]
+[WHERE condition];
+Example:
+DELETE FROM dbo.Orders
+WHERE  Status = 'Cancelled' AND OrderDate < '2023-01-01';
+
+-- Delete using a join
+DELETE o
+FROM   dbo.Orders AS o
+JOIN   dbo.Customers AS c ON c.CustomerId = o.CustomerId
+WHERE  c.Active = 0;
+
+-- Delete in batches to keep the log small
+WHILE 1 = 1
+BEGIN
+    DELETE TOP (5000) FROM dbo.AuditLog WHERE LoggedAt < '2023-01-01';
+    IF @@ROWCOUNT = 0 BREAK;
+END;
+Notes: Without WHERE every row is deleted (fully logged, identity not reset). Foreign keys can block the delete.
+See also: TRUNCATE TABLE, UPDATE, OUTPUT
+
+=== Data modification | MERGE
+Summary: Insert, update and delete in one statement, driven by a source.
+Syntax:
+MERGE target AS t
+USING source AS s ON t.key = s.key
+WHEN MATCHED [AND condition] THEN
+    UPDATE SET t.col = s.col
+WHEN NOT MATCHED [BY TARGET] THEN
+    INSERT (col1, col2) VALUES (s.col1, s.col2)
+WHEN NOT MATCHED BY SOURCE THEN
+    DELETE
+[OUTPUT $action, inserted.*, deleted.*];
+Example:
+MERGE dbo.Products AS t
+USING dbo.ProductsStaging AS s ON t.Sku = s.Sku
+WHEN MATCHED AND t.Price <> s.Price THEN
+    UPDATE SET t.Price = s.Price
+WHEN NOT MATCHED THEN
+    INSERT (Sku, Name, Price) VALUES (s.Sku, s.Name, s.Price);
+Notes: Must end with a semicolon. MERGE has a history of edge-case bugs and concurrency pitfalls; many teams prefer separate UPDATE and INSERT statements. If you use it, add HOLDLOCK to the target for concurrent workloads.
+See also: UPDATE, INSERT, OUTPUT
+
+=== Data modification | TRUNCATE TABLE
+Summary: Removes all rows quickly and resets identity.
+Syntax:
+TRUNCATE TABLE table_name;
+Example:
+TRUNCATE TABLE dbo.StagingOrders;
+Notes: No WHERE clause. Minimally logged, resets IDENTITY to its seed, and fails if the table is referenced by a foreign key. It can be rolled back inside a transaction. Needs ALTER permission on the table.
+See also: DELETE, DROP TABLE
+
+=== Data modification | OUTPUT clause
+Summary: Returns the rows affected by INSERT, UPDATE, DELETE or MERGE.
+Syntax:
+INSERT ... OUTPUT inserted.col [, ...] [INTO @table_variable] VALUES ...
+UPDATE ... SET ... OUTPUT deleted.col AS OldValue, inserted.col AS NewValue WHERE ...
+DELETE ... OUTPUT deleted.* WHERE ...
+Example:
+UPDATE dbo.Products
+SET    Price = Price * 1.1
+OUTPUT deleted.ProductId, deleted.Price AS OldPrice, inserted.Price AS NewPrice
+WHERE  CategoryId = 4;
+
+DECLARE @new TABLE (Id int);
+INSERT INTO dbo.Customers (Name)
+OUTPUT inserted.CustomerId INTO @new
+VALUES (N'Contoso');
+Notes: inserted holds the new values, deleted the old ones. It is the reliable way to get generated identity values for multi-row inserts.
+See also: SCOPE_IDENTITY, INSERT, UPDATE
+
+=== Data modification | SELECT INTO
+Summary: Creates a new table from a query result.
+Syntax:
+SELECT columns
+INTO   new_table
+FROM   source
+[WHERE ...];
+Example:
+SELECT OrderId, CustomerId, Total
+INTO   dbo.OrdersBackup
+FROM   dbo.Orders
+WHERE  OrderDate < '2023-01-01';
+
+SELECT * INTO #Work FROM dbo.Orders WHERE Status = 'Open';   -- temp table
+Notes: The new table copies column names and types but not indexes, keys or defaults. It fails if the table already exists.
+See also: INSERT, Temporary tables
+
+=== Data modification | SET IDENTITY_INSERT
+Summary: Lets you insert explicit values into an IDENTITY column.
+Syntax:
+SET IDENTITY_INSERT table ON;
+INSERT INTO table (identity_column, ...) VALUES (...);
+SET IDENTITY_INSERT table OFF;
+Example:
+SET IDENTITY_INSERT dbo.Customers ON;
+INSERT INTO dbo.Customers (CustomerId, Name) VALUES (1000, N'Imported');
+SET IDENTITY_INSERT dbo.Customers OFF;
+Notes: The column list is mandatory. Only one table per session can have it ON at a time.
+See also: IDENTITY, INSERT
+
+=== Data modification | BULK INSERT
+Summary: Loads a data file (CSV, text) into a table.
+Syntax:
+BULK INSERT table
+FROM 'path\file.csv'
+WITH (FORMAT = 'CSV', FIRSTROW = 2, FIELDTERMINATOR = ',', ROWTERMINATOR = '\n', CODEPAGE = '65001', TABLOCK);
+Example:
+BULK INSERT dbo.StagingCustomers
+FROM 'D:\Import\customers.csv'
+WITH (FORMAT = 'CSV', FIRSTROW = 2, FIELDTERMINATOR = ',', TABLOCK);
+Notes: The path is read by the SQL Server service, so it must be reachable from the server (not from your PC). FORMAT = 'CSV' needs SQL Server 2017+.
+See also: INSERT, SELECT INTO
+
+=== Tables & schema | CREATE TABLE
+Summary: Defines a new table.
+Syntax:
+CREATE TABLE [schema.]table_name (
+    column_name data_type [NOT NULL | NULL]
+        [IDENTITY(seed, increment)]
+        [CONSTRAINT name DEFAULT (value)]
+        [CONSTRAINT name PRIMARY KEY | UNIQUE],
+    ...
+    [CONSTRAINT name CHECK (condition)],
+    [CONSTRAINT name FOREIGN KEY (col) REFERENCES other (col)]
+);
+Example:
+CREATE TABLE dbo.Employees (
+    EmployeeId   int IDENTITY(1,1) NOT NULL CONSTRAINT PK_Employees PRIMARY KEY,
+    FirstName    nvarchar(50)  NOT NULL,
+    Email        nvarchar(255) NULL CONSTRAINT UQ_Employees_Email UNIQUE,
+    Salary       decimal(10,2) NOT NULL CONSTRAINT DF_Employees_Salary DEFAULT (0),
+    DepartmentId int NULL CONSTRAINT FK_Employees_Departments REFERENCES dbo.Departments (DepartmentId),
+    HiredOn      date NOT NULL CONSTRAINT DF_Employees_HiredOn DEFAULT (CAST(GETDATE() AS date)),
+    CONSTRAINT CK_Employees_Salary CHECK (Salary >= 0)
+);
+Notes: Name your constraints - system-generated names make later ALTERs painful. Use DROP TABLE IF EXISTS first in re-runnable scripts.
+See also: Data types, ALTER TABLE, DROP TABLE
+
+=== Tables & schema | Data types
+Summary: The data types you will use most.
+Syntax:
+Whole numbers   bit, tinyint (0-255), smallint, int, bigint
+Exact decimals  decimal(p,s) / numeric(p,s), money, smallmoney
+Approximate     float(n), real
+Date and time   date, time(n), datetime2(n), datetime, smalldatetime, datetimeoffset
+Text            char(n), varchar(n | MAX), nchar(n), nvarchar(n | MAX)
+Binary          binary(n), varbinary(n | MAX)
+Other           uniqueidentifier, xml, rowversion, sql_variant, hierarchyid, geography, geometry
+Example:
+CREATE TABLE dbo.Demo (
+    Id        bigint        NOT NULL,
+    Price     decimal(12,2) NOT NULL,
+    Created   datetime2(3)  NOT NULL,
+    Name      nvarchar(100) NULL,       -- Unicode
+    Code      varchar(20)   NULL,       -- non-Unicode
+    Flag      bit           NOT NULL,
+    Guid      uniqueidentifier NOT NULL DEFAULT NEWID()
+);
+Notes: Prefer datetime2 over datetime, nvarchar when you need accented/Unicode text, and decimal over float for money. text, ntext and image are deprecated - use varchar(MAX), nvarchar(MAX) and varbinary(MAX). varchar without a length means 1 in a declaration but 30 in CAST - always give a length.
+See also: CAST, CREATE TABLE
+
+=== Tables & schema | ALTER TABLE - add column
+Summary: Adds a column to an existing table.
+Syntax:
+ALTER TABLE table
+ADD column_name data_type [NULL | NOT NULL] [CONSTRAINT name DEFAULT (value)];
+Example:
+ALTER TABLE dbo.Employees
+ADD Phone nvarchar(30) NULL;
+
+ALTER TABLE dbo.Employees
+ADD IsActive bit NOT NULL CONSTRAINT DF_Employees_IsActive DEFAULT (1);
+Notes: A NOT NULL column on a table with rows needs a DEFAULT. Adding a nullable column is a metadata-only change and is instant.
+See also: ALTER COLUMN, DROP COLUMN
+
+=== Tables & schema | ALTER TABLE - alter column
+Summary: Changes a column's type, length or nullability.
+Syntax:
+ALTER TABLE table
+ALTER COLUMN column_name new_data_type [NULL | NOT NULL];
+Example:
+ALTER TABLE dbo.Employees ALTER COLUMN Phone nvarchar(50) NULL;
+ALTER TABLE dbo.Employees ALTER COLUMN LastName nvarchar(100) NOT NULL;
+Notes: Repeat NULL / NOT NULL, otherwise the column becomes nullable. You must drop dependent indexes and constraints first. Shrinking a column or changing type can fail or truncate data.
+See also: ALTER TABLE - add column, DROP COLUMN
+
+=== Tables & schema | ALTER TABLE - drop column
+Summary: Removes a column.
+Syntax:
+ALTER TABLE table
+DROP COLUMN [IF EXISTS] column_name [, ...];
+Example:
+ALTER TABLE dbo.Employees DROP COLUMN Phone;
+Notes: Fails if a constraint, index or computed column depends on it - drop those first. IF EXISTS needs SQL Server 2016+. The data is gone for good, so back up first.
+See also: ALTER TABLE - add column
+
+=== Tables & schema | Constraints
+Summary: Primary key, foreign key, unique, check and default constraints.
+Syntax:
+ALTER TABLE t ADD CONSTRAINT PK_t PRIMARY KEY (col [, ...]);
+ALTER TABLE t ADD CONSTRAINT FK_t_other FOREIGN KEY (col) REFERENCES other (col)
+      [ON DELETE CASCADE | SET NULL | NO ACTION] [ON UPDATE CASCADE | ...];
+ALTER TABLE t ADD CONSTRAINT UQ_t_col UNIQUE (col);
+ALTER TABLE t ADD CONSTRAINT CK_t_col CHECK (col > 0);
+ALTER TABLE t ADD CONSTRAINT DF_t_col DEFAULT (0) FOR col;
+ALTER TABLE t DROP CONSTRAINT constraint_name;
+Example:
+ALTER TABLE dbo.Orders
+ADD CONSTRAINT FK_Orders_Customers
+    FOREIGN KEY (CustomerId) REFERENCES dbo.Customers (CustomerId);
+
+ALTER TABLE dbo.Orders ADD CONSTRAINT DF_Orders_Status DEFAULT ('Open') FOR Status;
+Notes: To add a constraint without validating existing rows use WITH NOCHECK (it becomes untrusted - avoid). Foreign keys are not indexed automatically; index the referencing column.
+See also: CREATE TABLE, CREATE INDEX
+
+=== Tables & schema | DROP TABLE
+Summary: Deletes a table and its data.
+Syntax:
+DROP TABLE [IF EXISTS] [schema.]table [, ...];
+Example:
+DROP TABLE IF EXISTS dbo.StagingOrders;
+DROP TABLE IF EXISTS #Work;
+Notes: IF EXISTS needs SQL Server 2016+; older versions use IF OBJECT_ID('dbo.T', 'U') IS NOT NULL DROP TABLE dbo.T;. Referencing foreign keys must be dropped first.
+See also: TRUNCATE TABLE, OBJECT_ID
+
+=== Tables & schema | CREATE INDEX
+Summary: Creates an index to speed up reads.
+Syntax:
+CREATE [UNIQUE] [CLUSTERED | NONCLUSTERED] INDEX index_name
+ON table (column1 [ASC | DESC] [, ...])
+[INCLUDE (column [, ...])]
+[WHERE filter_condition]
+[WITH (ONLINE = ON, FILLFACTOR = 90, DROP_EXISTING = ON)];
+Example:
+CREATE NONCLUSTERED INDEX IX_Orders_CustomerId_OrderDate
+ON dbo.Orders (CustomerId, OrderDate DESC)
+INCLUDE (Total);
+
+CREATE UNIQUE INDEX UX_Employees_Email ON dbo.Employees (Email) WHERE Email IS NOT NULL;
+Notes: Put equality columns first, then range columns. INCLUDE adds non-key columns so the index covers the query. Every index slows INSERT/UPDATE/DELETE a little. ONLINE = ON needs Enterprise edition (or Azure SQL).
+See also: DROP INDEX, Index fragmentation, SET STATISTICS IO / TIME
+
+=== Tables & schema | DROP INDEX
+Summary: Removes an index.
+Syntax:
+DROP INDEX [IF EXISTS] index_name ON table;
+Example:
+DROP INDEX IF EXISTS IX_Orders_CustomerId_OrderDate ON dbo.Orders;
+Notes: Indexes that back a PRIMARY KEY or UNIQUE constraint are removed by dropping the constraint.
+See also: CREATE INDEX
+
+=== Tables & schema | CREATE VIEW
+Summary: Saves a query as a virtual table.
+Syntax:
+CREATE [OR ALTER] VIEW [schema.]view_name [WITH SCHEMABINDING]
+AS
+    select_statement;
+Example:
+CREATE OR ALTER VIEW dbo.vOpenOrders
+AS
+SELECT o.OrderId, c.Name AS Customer, o.Total
+FROM   dbo.Orders AS o
+JOIN   dbo.Customers AS c ON c.CustomerId = o.CustomerId
+WHERE  o.Status = 'Open';
+GO
+SELECT * FROM dbo.vOpenOrders;
+Notes: CREATE VIEW must be the first statement in its batch (use GO before it). CREATE OR ALTER needs SQL Server 2016 SP1+. ORDER BY is not allowed without TOP/OFFSET.
+See also: CREATE FUNCTION, GO
+
+=== Tables & schema | CREATE DATABASE
+Summary: Creates a database.
+Syntax:
+CREATE DATABASE database_name
+[ON PRIMARY (NAME = logical_data, FILENAME = 'path.mdf', SIZE = 100MB, FILEGROWTH = 64MB)]
+[LOG ON   (NAME = logical_log,  FILENAME = 'path.ldf', SIZE = 50MB,  FILEGROWTH = 64MB)]
+[COLLATE collation_name];
+Example:
+CREATE DATABASE Sales;
+GO
+USE Sales;
+GO
+DROP DATABASE IF EXISTS SalesOld;
+Notes: Without ON/LOG ON the default data and log folders are used.
+See also: USE, ALTER DATABASE, BACKUP DATABASE
+
+=== Tables & schema | CREATE SCHEMA
+Summary: Creates a schema (a namespace and security boundary for objects).
+Syntax:
+CREATE SCHEMA schema_name [AUTHORIZATION owner];
+Example:
+CREATE SCHEMA Reporting AUTHORIZATION dbo;
+GO
+CREATE VIEW Reporting.vSales AS SELECT 1 AS x;
+Notes: Must be the first statement in its batch. Always qualify objects with their schema (dbo.Table).
+See also: CREATE TABLE, GRANT
+
+=== Tables & schema | IDENTITY
+Summary: Auto-incrementing column.
+Syntax:
+column_name int IDENTITY(seed, increment)
+
+SCOPE_IDENTITY()          last identity in this scope and session
+@@IDENTITY                last identity in this session (any scope, includes triggers)
+IDENT_CURRENT('table')    last identity for a table (any session)
+DBCC CHECKIDENT ('table', RESEED, n)
+Example:
+CREATE TABLE dbo.Customers (CustomerId int IDENTITY(1,1) PRIMARY KEY, Name nvarchar(100));
+INSERT INTO dbo.Customers (Name) VALUES (N'Contoso');
+SELECT SCOPE_IDENTITY() AS NewId;
+Notes: Identity values can have gaps (rollbacks, restarts) and are not guaranteed to be sequential. Use SCOPE_IDENTITY(), not @@IDENTITY.
+See also: SCOPE_IDENTITY, CREATE SEQUENCE, SET IDENTITY_INSERT
+
+=== Tables & schema | CREATE SEQUENCE | 2012+
+Summary: A number generator independent of any table.
+Syntax:
+CREATE SEQUENCE schema.name AS int START WITH 1 INCREMENT BY 1 [MINVALUE n] [MAXVALUE n] [CYCLE] [CACHE n];
+NEXT VALUE FOR schema.name
+Example:
+CREATE SEQUENCE dbo.OrderNumber AS int START WITH 1000 INCREMENT BY 1;
+
+SELECT NEXT VALUE FOR dbo.OrderNumber;
+
+CREATE TABLE dbo.Orders (
+    OrderNo int NOT NULL DEFAULT (NEXT VALUE FOR dbo.OrderNumber)
+);
+Notes: Unlike IDENTITY you can share one sequence across tables and fetch the number before inserting.
+See also: IDENTITY
+
+=== Tables & schema | Temporary tables
+Summary: Short-lived tables in tempdb: #local, ##global and table variables.
+Syntax:
+CREATE TABLE #name (...);        -- visible to the current session, dropped when it ends
+CREATE TABLE ##name (...);       -- visible to all sessions
+DECLARE @name TABLE (...);       -- table variable, scoped to the batch
+SELECT ... INTO #name FROM ...;
+Example:
+DROP TABLE IF EXISTS #Totals;
+SELECT CustomerId, SUM(Total) AS Spent
+INTO   #Totals
+FROM   dbo.Orders
+GROUP BY CustomerId;
+
+SELECT * FROM #Totals WHERE Spent > 1000;
+
+DECLARE @Ids TABLE (Id int PRIMARY KEY);
+INSERT INTO @Ids VALUES (1), (2), (3);
+Notes: Temp tables have statistics and can be indexed - better for larger sets. Table variables are fine for a few rows and are not affected by ROLLBACK.
+See also: SELECT INTO, DROP TABLE
+
+=== Tables & schema | Computed columns
+Summary: A column whose value is calculated from other columns.
+Syntax:
+column_name AS (expression) [PERSISTED]
+Example:
+ALTER TABLE dbo.OrderLines
+ADD LineTotal AS (Quantity * UnitPrice) PERSISTED;
+
+CREATE TABLE dbo.People (
+    FirstName nvarchar(50), LastName nvarchar(50),
+    FullName AS (FirstName + N' ' + LastName)
+);
+Notes: PERSISTED stores the value (and allows indexing when the expression is deterministic). Computed columns cannot be inserted into.
+See also: CREATE TABLE
+
+=== Tables & schema | sp_rename
+Summary: Renames a table, column or index.
+Syntax:
+EXEC sp_rename 'schema.old_table', 'new_table';
+EXEC sp_rename 'schema.table.old_column', 'new_column', 'COLUMN';
+EXEC sp_rename 'schema.table.old_index', 'new_index', 'INDEX';
+Example:
+EXEC sp_rename 'dbo.Employees.Phone', 'PhoneNumber', 'COLUMN';
+EXEC sp_rename 'dbo.Staff', 'Employees';
+Notes: The new name is given without the schema or table prefix. Views, procedures and queries that use the old name are not updated automatically.
+See also: ALTER TABLE - alter column
+
+=== Aggregate functions | COUNT
+Summary: Counts rows or non-NULL values.
+Syntax:
+COUNT(*)                 all rows
+COUNT(expression)        rows where expression IS NOT NULL
+COUNT(DISTINCT expression)
+COUNT_BIG(...)           same, returns bigint
+Example:
+SELECT COUNT(*)                   AS AllRows,
+       COUNT(ManagerId)           AS WithManager,
+       COUNT(DISTINCT DepartmentId) AS Departments
+FROM   dbo.Employees;
+Notes: COUNT returns int; use COUNT_BIG above 2.1 billion rows.
+See also: GROUP BY, APPROX_COUNT_DISTINCT
+
+=== Aggregate functions | SUM
+Summary: Adds values (NULLs ignored).
+Syntax:
+SUM([ALL | DISTINCT] expression)
+Example:
+SELECT CustomerId, SUM(Total) AS Spent
+FROM   dbo.Orders
+GROUP BY CustomerId;
+Notes: SUM of an empty set is NULL - wrap with COALESCE(SUM(x), 0). SUM of int overflows at 2.1 billion; cast to bigint if needed.
+See also: AVG, COALESCE, GROUP BY
+
+=== Aggregate functions | AVG
+Summary: Average of values (NULLs ignored).
+Syntax:
+AVG([ALL | DISTINCT] expression)
+Example:
+SELECT AVG(Salary)               AS AvgSalary,
+       AVG(CAST(Age AS decimal(9,2))) AS AvgAge
+FROM   dbo.Employees;
+Notes: AVG of an integer column returns an integer (truncated). Cast to decimal first for a precise result.
+See also: SUM, CAST
+
+=== Aggregate functions | MIN / MAX
+Summary: Smallest or largest value.
+Syntax:
+MIN(expression)
+MAX(expression)
+Example:
+SELECT MIN(OrderDate) AS FirstOrder, MAX(OrderDate) AS LastOrder
+FROM   dbo.Orders;
+Notes: Work on numbers, dates and strings. NULLs are ignored.
+See also: TOP, ROW_NUMBER
+
+=== Aggregate functions | STRING_AGG | 2017+
+Summary: Concatenates values from many rows into one string.
+Syntax:
+STRING_AGG(expression, separator) [WITHIN GROUP (ORDER BY column [ASC | DESC])]
+Example:
+SELECT DepartmentId,
+       STRING_AGG(LastName, ', ') WITHIN GROUP (ORDER BY LastName) AS Employees
+FROM   dbo.Employees
+GROUP BY DepartmentId;
+Notes: NULLs are skipped. If the result can exceed 8000 bytes, cast the input to varchar(MAX)/nvarchar(MAX). Before 2017 use FOR XML PATH.
+See also: CONCAT, FOR XML PATH
+
+=== Aggregate functions | STDEV / VAR
+Summary: Standard deviation and variance.
+Syntax:
+STDEV(expr)   sample standard deviation      STDEVP(expr)  population
+VAR(expr)     sample variance                VARP(expr)    population
+Example:
+SELECT STDEV(Price) AS PriceStdDev, VAR(Price) AS PriceVariance FROM dbo.Products;
+Notes: Needs at least two non-NULL values for the sample versions.
+See also: AVG
+
+=== Aggregate functions | APPROX_COUNT_DISTINCT | 2019+
+Summary: Fast, approximate distinct count for very large tables.
+Syntax:
+APPROX_COUNT_DISTINCT(expression)
+Example:
+SELECT APPROX_COUNT_DISTINCT(CustomerId) FROM dbo.HugeOrders;
+Notes: Error is around 2% with high probability; much cheaper than COUNT(DISTINCT) on billions of rows.
+See also: COUNT
+
+=== String functions | LEN
+Summary: Number of characters (trailing spaces not counted).
+Syntax:
+LEN(string)
+Example:
+SELECT LEN('SQL Server');   -- 10
+SELECT LEN('abc   ');       -- 3
+Notes: Use DATALENGTH for bytes (nvarchar uses 2 bytes per character). Returns NULL for NULL.
+See also: DATALENGTH
+
+=== String functions | DATALENGTH
+Summary: Number of bytes used by a value.
+Syntax:
+DATALENGTH(expression)
+Example:
+SELECT DATALENGTH('abc');    -- 3
+SELECT DATALENGTH(N'abc');   -- 6
+Notes: Counts trailing spaces, unlike LEN.
+See also: LEN
+
+=== String functions | LEFT / RIGHT
+Summary: First or last N characters.
+Syntax:
+LEFT(string, n)
+RIGHT(string, n)
+Example:
+SELECT LEFT('Lisboa', 3);    -- 'Lis'
+SELECT RIGHT('Lisboa', 3);   -- 'boa'
+
+-- Zero-pad to 5 digits
+SELECT RIGHT('00000' + CAST(42 AS varchar(10)), 5);   -- '00042'
+See also: SUBSTRING, FORMAT
+
+=== String functions | SUBSTRING
+Summary: Extracts part of a string.
+Syntax:
+SUBSTRING(string, start, length)
+Example:
+SELECT SUBSTRING('Hello World', 7, 5);   -- 'World'
+
+-- Everything after the first '@'
+SELECT SUBSTRING(Email, CHARINDEX('@', Email) + 1, LEN(Email)) FROM dbo.Customers;
+Notes: Positions start at 1 and the length argument is required. A start beyond the string returns an empty string.
+See also: CHARINDEX, LEFT / RIGHT
+
+=== String functions | CHARINDEX
+Summary: Position of a substring (0 when not found).
+Syntax:
+CHARINDEX(substring, string [, start_position])
+Example:
+SELECT CHARINDEX('SQL', 'Learn SQL Server');        -- 7
+SELECT CHARINDEX('x', 'abc');                       -- 0
+SELECT CHARINDEX('a', 'banana', 3);                 -- 4
+Notes: Search is case-insensitive or not depending on the collation. Use PATINDEX for wildcards.
+See also: PATINDEX, SUBSTRING
+
+=== String functions | PATINDEX
+Summary: Position of a pattern (with wildcards) in a string.
+Syntax:
+PATINDEX('%pattern%', string)
+Example:
+SELECT PATINDEX('%[0-9]%', 'abc123');   -- 4 (first digit)
+SELECT PATINDEX('%ing', 'testing');     -- 5
+Notes: Returns 0 when not found. Uses the LIKE wildcards.
+See also: CHARINDEX, LIKE
+
+=== String functions | REPLACE
+Summary: Replaces every occurrence of a substring.
+Syntax:
+REPLACE(string, pattern, replacement)
+Example:
+SELECT REPLACE('2024-03-15', '-', '/');                 -- '2024/03/15'
+UPDATE dbo.Contacts SET Phone = REPLACE(Phone, ' ', '');
+Notes: Case sensitivity follows the collation. Returns NULL if any argument is NULL.
+See also: STUFF, TRANSLATE
+
+=== String functions | STUFF
+Summary: Deletes part of a string and inserts another in its place.
+Syntax:
+STUFF(string, start, length, replacement)
+Example:
+SELECT STUFF('abcdef', 2, 3, 'XYZ');   -- 'aXYZef'
+SELECT STUFF('abcdef', 3, 0, '--');    -- 'ab--cdef' (pure insert)
+Notes: Often used to remove the leading separator after concatenating with FOR XML PATH.
+See also: REPLACE, FOR XML PATH
+
+=== String functions | UPPER / LOWER
+Summary: Changes case.
+Syntax:
+UPPER(string)
+LOWER(string)
+Example:
+SELECT UPPER('sql'), LOWER('SQL');   -- 'SQL', 'sql'
+Notes: Case-insensitive comparisons are usually unnecessary because default collations are case-insensitive.
+See also: COLLATE, LIKE
+
+=== String functions | COLLATE
+Summary: Overrides the collation (case, accent and sort rules) for a comparison or a column.
+Syntax:
+expression COLLATE collation_name
+column_name data_type COLLATE collation_name
+
+CI / CS = case insensitive / sensitive, AI / AS = accent insensitive / sensitive
+Example:
+-- Case-sensitive comparison on a case-insensitive database
+SELECT * FROM dbo.Customers WHERE Name = 'smith' COLLATE Latin1_General_CS_AS;
+
+SELECT name, collation_name FROM sys.databases;
+SELECT SERVERPROPERTY('Collation');
+
+-- Temp tables use the tempdb collation; avoid conflicts with the current database
+CREATE TABLE #t (Name varchar(50) COLLATE DATABASE_DEFAULT);
+Notes: Comparing columns with different collations fails with "Cannot resolve the collation conflict". Fix it with COLLATE DATABASE_DEFAULT or an explicit collation on one side.
+See also: UPPER / LOWER, LIKE
+
+=== String functions | LTRIM / RTRIM / TRIM | 2017+
+Summary: Removes leading and trailing spaces (or other characters).
+Syntax:
+LTRIM(string)
+RTRIM(string)
+TRIM([characters FROM] string)
+Example:
+SELECT LTRIM('   abc'), RTRIM('abc   '), TRIM('  abc  ');
+SELECT TRIM('.,! ' FROM '  ...Hello!!  ');   -- 'Hello'
+Notes: LTRIM/RTRIM exist in every version; TRIM needs 2017+. Only spaces are removed unless you give characters.
+See also: REPLACE
+
+=== String functions | CONCAT | 2012+
+Summary: Joins strings, treating NULL as an empty string.
+Syntax:
+CONCAT(value1, value2 [, value3 ...])
+Example:
+SELECT CONCAT(FirstName, ' ', MiddleName, ' ', LastName) FROM dbo.People;
+SELECT 'Hello ' + NULL;        -- NULL
+SELECT CONCAT('Hello ', NULL); -- 'Hello '
+Notes: The + operator returns NULL if any part is NULL; CONCAT does not. Non-string arguments are converted for you.
+See also: CONCAT_WS, STRING_AGG
+
+=== String functions | CONCAT_WS | 2017+
+Summary: Joins strings with a separator, skipping NULLs.
+Syntax:
+CONCAT_WS(separator, value1, value2 [, ...])
+Example:
+SELECT CONCAT_WS(', ', Street, City, PostalCode, Country) FROM dbo.Addresses;
+SELECT CONCAT_WS('-', '2024', '03', '15');   -- '2024-03-15'
+Notes: NULL arguments are skipped without leaving a doubled separator.
+See also: CONCAT
+
+=== String functions | REPLICATE
+Summary: Repeats a string N times.
+Syntax:
+REPLICATE(string, count)
+Example:
+SELECT REPLICATE('ab', 3);                  -- 'ababab'
+SELECT REPLICATE('0', 5 - LEN('42')) + '42'; -- '00042'
+Notes: The result is truncated to 8000 bytes unless the input is varchar(MAX)/nvarchar(MAX).
+See also: SPACE, RIGHT
+
+=== String functions | REVERSE
+Summary: Reverses a string.
+Syntax:
+REVERSE(string)
+Example:
+SELECT REVERSE('abc');   -- 'cba'
+Notes: Handy for finding the last occurrence of a character.
+See also: CHARINDEX
+
+=== String functions | SPACE
+Summary: A string of N spaces.
+Syntax:
+SPACE(n)
+Example:
+SELECT 'A' + SPACE(3) + 'B';   -- 'A   B'
+See also: REPLICATE
+
+=== String functions | FORMAT | 2012+
+Summary: Formats numbers and dates using .NET format strings.
+Syntax:
+FORMAT(value, format [, culture])
+Example:
+SELECT FORMAT(GETDATE(), 'yyyy-MM-dd HH:mm');    -- 2024-03-15 14:30
+SELECT FORMAT(1234567.891, 'N2', 'en-US');        -- 1,234,567.89
+SELECT FORMAT(0.256, 'P1');                       -- 25.6 %
+SELECT FORMAT(5, 'D3');                           -- 005
+Notes: Convenient but slow on large result sets (it uses the CLR). For bulk work prefer CONVERT or CAST.
+See also: CONVERT, CAST
+
+=== String functions | STRING_SPLIT | 2016+
+Summary: Splits a delimited string into rows.
+Syntax:
+STRING_SPLIT(string, separator [, enable_ordinal])    -- ordinal: 2022+
+Example:
+SELECT value FROM STRING_SPLIT('red,green,blue', ',');
+
+SELECT c.*
+FROM   dbo.Customers AS c
+WHERE  c.CustomerId IN (SELECT CAST(value AS int) FROM STRING_SPLIT('1,2,3', ','));
+Notes: Needs database compatibility level 130 or higher. The row order is not guaranteed unless you use the ordinal option (2022+). The separator must be a single character.
+See also: STRING_AGG, OPENJSON
+
+=== String functions | CHAR / ASCII / NCHAR / UNICODE
+Summary: Converts between characters and their codes.
+Syntax:
+CHAR(code)       ASCII(char)
+NCHAR(code)      UNICODE(nchar)
+Example:
+SELECT CHAR(65), ASCII('A');            -- 'A', 65
+SELECT NCHAR(8364), UNICODE(N'€');      -- euro sign, 8364
+SELECT 'Line1' + CHAR(13) + CHAR(10) + 'Line2';   -- new line
+Notes: CHAR(9) is tab, CHAR(10) line feed, CHAR(13) carriage return.
+See also: REPLACE
+
+=== String functions | QUOTENAME
+Summary: Wraps an identifier in brackets so it is safe in dynamic SQL.
+Syntax:
+QUOTENAME(identifier [, quote_char])
+Example:
+SELECT QUOTENAME('Order Details');       -- [Order Details]
+DECLARE @sql nvarchar(max) = N'SELECT * FROM ' + QUOTENAME(@schema) + N'.' + QUOTENAME(@table);
+Notes: Always use it for table and column names that come from variables. Use parameters (sp_executesql) for values.
+See also: sp_executesql
+
+=== String functions | TRANSLATE | 2017+
+Summary: Replaces several single characters in one pass.
+Syntax:
+TRANSLATE(string, characters, translations)
+Example:
+SELECT TRANSLATE('2*[3+4]/{7-2}', '[]{}', '()()');   -- '2*(3+4)/(7-2)'
+Notes: characters and translations must have the same length.
+See also: REPLACE
+
+=== String functions | SOUNDEX / DIFFERENCE
+Summary: Phonetic matching of names.
+Syntax:
+SOUNDEX(string)
+DIFFERENCE(string1, string2)   -- 0 (no match) to 4 (strong match)
+Example:
+SELECT SOUNDEX('Smith'), SOUNDEX('Smyth');   -- S530, S530
+SELECT * FROM dbo.Customers WHERE DIFFERENCE(LastName, 'Smith') = 4;
+Notes: Designed for English names; results for other languages vary.
+See also: LIKE
+
+=== Date & time functions | GETDATE / SYSDATETIME
+Summary: Current date and time of the server.
+Syntax:
+GETDATE()                 datetime
+SYSDATETIME()             datetime2(7)
+GETUTCDATE()              datetime, UTC
+SYSUTCDATETIME()          datetime2(7), UTC
+SYSDATETIMEOFFSET()       datetimeoffset
+CURRENT_TIMESTAMP         same as GETDATE()
+Example:
+SELECT GETDATE(), SYSDATETIME(), GETUTCDATE(), SYSDATETIMEOFFSET();
+SELECT CAST(GETDATE() AS date) AS Today;
+Notes: Cast to date to drop the time part. Prefer SYSUTCDATETIME() for audit columns so values do not depend on daylight saving.
+See also: DATEADD, AT TIME ZONE
+
+=== Date & time functions | DATEADD
+Summary: Adds (or subtracts) an interval to a date.
+Syntax:
+DATEADD(datepart, number, date)
+
+datepart: year (yy), quarter (qq), month (mm), dayofyear (dy), day (dd),
+          week (wk), hour (hh), minute (mi), second (ss), millisecond (ms)
+Example:
+SELECT DATEADD(day, 7, GETDATE());       -- one week from now
+SELECT DATEADD(month, -3, '2024-03-31'); -- 2023-12-31
+SELECT DATEADD(day, DATEDIFF(day, 0, GETDATE()), 0);   -- start of today
+Notes: Use a negative number to subtract. Adding months clamps to the last valid day.
+See also: DATEDIFF, EOMONTH
+
+=== Date & time functions | DATEDIFF
+Summary: Number of date boundaries crossed between two dates.
+Syntax:
+DATEDIFF(datepart, startdate, enddate)
+DATEDIFF_BIG(datepart, startdate, enddate)    -- bigint, 2016+
+Example:
+SELECT DATEDIFF(day, '2024-01-01', '2024-03-01');     -- 60
+SELECT DATEDIFF(year, '2023-12-31', '2024-01-01');    -- 1 (boundary crossed)
+SELECT DATEDIFF(minute, StartedAt, FinishedAt) FROM dbo.Jobs;
+Notes: It counts boundaries, not full elapsed units, so year/month results can look surprising. Returns int - use DATEDIFF_BIG for milliseconds over long spans.
+See also: DATEADD, DATEPART
+
+=== Date & time functions | DATEPART / DATENAME
+Summary: A part of a date as a number (DATEPART) or as text (DATENAME).
+Syntax:
+DATEPART(datepart, date)
+DATENAME(datepart, date)
+Example:
+SELECT DATEPART(month, '2024-03-15');     -- 3
+SELECT DATENAME(weekday, '2024-03-15');   -- 'Friday'
+SELECT DATENAME(month, '2024-03-15');     -- 'March'
+SELECT DATEPART(weekday, GETDATE());      -- depends on SET DATEFIRST
+Notes: Weekday numbers depend on SET DATEFIRST; names depend on the session language.
+See also: DAY / MONTH / YEAR
+
+=== Date & time functions | DAY / MONTH / YEAR
+Summary: Shortcuts for day, month and year numbers.
+Syntax:
+DAY(date)   MONTH(date)   YEAR(date)
+Example:
+SELECT YEAR(GETDATE()), MONTH(GETDATE()), DAY(GETDATE());
+SELECT YEAR(OrderDate) AS Yr, COUNT(*) FROM dbo.Orders GROUP BY YEAR(OrderDate);
+Notes: In a WHERE clause, YEAR(col) = 2024 cannot use an index on col; use a date range.
+See also: DATEPART / DATENAME, BETWEEN
+
+=== Date & time functions | EOMONTH | 2012+
+Summary: Last day of the month.
+Syntax:
+EOMONTH(start_date [, month_to_add])
+Example:
+SELECT EOMONTH('2024-02-10');        -- 2024-02-29
+SELECT EOMONTH(GETDATE(), -1);       -- last day of previous month
+SELECT DATEADD(day, 1, EOMONTH(GETDATE(), -1));   -- first day of this month
+See also: DATEADD, DATEFROMPARTS
+
+=== Date & time functions | DATEFROMPARTS | 2012+
+Summary: Builds a date from year, month and day.
+Syntax:
+DATEFROMPARTS(year, month, day)
+DATETIME2FROMPARTS(year, month, day, hour, minute, seconds, fractions, precision)
+Example:
+SELECT DATEFROMPARTS(2024, 12, 25);
+SELECT DATEFROMPARTS(YEAR(GETDATE()), 1, 1);   -- first day of this year
+See also: EOMONTH, CAST
+
+=== Date & time functions | DATETRUNC | 2022+
+Summary: Truncates a date to a part (start of month, hour, week...).
+Syntax:
+DATETRUNC(datepart, date)
+Example:
+SELECT DATETRUNC(month, '2024-03-15 10:20:30');   -- 2024-03-01 00:00:00
+SELECT DATETRUNC(hour,  SYSDATETIME());
+Notes: On older versions use DATEADD(month, DATEDIFF(month, 0, d), 0).
+See also: DATEADD, DATEDIFF
+
+=== Date & time functions | ISDATE
+Summary: Tests whether a string is a valid date.
+Syntax:
+ISDATE(expression)    -- 1 or 0
+Example:
+SELECT ISDATE('2024-02-30');   -- 0
+SELECT ISDATE('2024-02-28');   -- 1
+Notes: Depends on language and DATEFORMAT settings. TRY_CONVERT(date, value) is more predictable.
+See also: TRY_CONVERT
+
+=== Date & time functions | AT TIME ZONE | 2016+
+Summary: Converts a date/time to a time zone.
+Syntax:
+datetime_expression AT TIME ZONE 'time zone name'
+Example:
+-- Treat a UTC value as UTC, then show it in Lisbon time
+SELECT SYSUTCDATETIME() AT TIME ZONE 'UTC' AT TIME ZONE 'GMT Standard Time';
+
+SELECT name FROM sys.time_zone_info;   -- valid names
+Notes: Applying it to a plain datetime only labels it with that zone; chain a second AT TIME ZONE to convert. Windows time zone names are used (Lisbon = 'GMT Standard Time').
+See also: GETDATE
+
+=== Math functions | ABS / SIGN
+Summary: Absolute value and sign.
+Syntax:
+ABS(number)    SIGN(number)    -- -1, 0 or 1
+Example:
+SELECT ABS(-5), SIGN(-5), SIGN(0), SIGN(12);   -- 5, -1, 0, 1
+See also: ROUND
+
+=== Math functions | ROUND
+Summary: Rounds a number.
+Syntax:
+ROUND(number, length [, function])    -- function <> 0 truncates
+Example:
+SELECT ROUND(123.4567, 2);        -- 123.4600
+SELECT ROUND(123.4567, 2, 1);     -- 123.4500 (truncate)
+SELECT ROUND(748.58, -1);         -- 750.00
+Notes: A negative length rounds to the left of the decimal point. The result keeps the original scale.
+See also: CEILING / FLOOR, CAST
+
+=== Math functions | CEILING / FLOOR
+Summary: Round up or down to a whole number.
+Syntax:
+CEILING(number)    FLOOR(number)
+Example:
+SELECT CEILING(4.2), FLOOR(4.8);        -- 5, 4
+SELECT CEILING(-4.2), FLOOR(-4.2);      -- -4, -5
+
+-- Number of pages
+SELECT CEILING(CAST(@Rows AS decimal(18,2)) / @PageSize);
+Notes: Integer division truncates (7 / 2 = 3); cast one operand to decimal first.
+See also: ROUND
+
+=== Math functions | POWER / SQRT / SQUARE
+Summary: Powers and roots.
+Syntax:
+POWER(number, exponent)    SQRT(number)    SQUARE(number)
+Example:
+SELECT POWER(2, 10), SQRT(16), SQUARE(5);   -- 1024, 4, 25
+See also: EXP, LOG
+
+=== Math functions | LOG / LOG10 / EXP / PI
+Summary: Logarithms, exponential and pi.
+Syntax:
+LOG(number [, base])   LOG10(number)   EXP(number)   PI()
+Example:
+SELECT LOG(100, 10), LOG10(1000), EXP(1), PI();   -- 2, 3, 2.718..., 3.14159...
+See also: POWER / SQRT / SQUARE
+
+=== Math functions | % (modulo)
+Summary: Remainder of an integer division.
+Syntax:
+dividend % divisor
+Example:
+SELECT 17 % 5;                                   -- 2
+SELECT * FROM dbo.Orders WHERE OrderId % 2 = 0;  -- even ids
+Notes: Division by zero raises an error: use x / NULLIF(y, 0).
+See also: NULLIF
+
+=== Math functions | RAND
+Summary: Pseudo-random number between 0 and 1.
+Syntax:
+RAND([seed])
+Example:
+SELECT RAND();
+SELECT CAST(RAND() * 100 AS int);          -- 0..99
+
+-- A different random value per row
+SELECT ABS(CHECKSUM(NEWID()) % 100) FROM dbo.Orders;
+Notes: RAND() is evaluated once per query, so every row gets the same value. Use CHECKSUM(NEWID()) for per-row randomness.
+See also: NEWID
+
+=== Conversion & NULL handling | CAST
+Summary: Converts a value to another data type (ANSI standard).
+Syntax:
+CAST(expression AS data_type [(length)])
+Example:
+SELECT CAST('2024-03-15' AS date);
+SELECT CAST(123.456 AS int);                 -- 123 (truncated)
+SELECT CAST(42 AS varchar(10)) + ' items';
+SELECT CAST(7 AS decimal(5,2)) / 2;          -- 3.50
+Notes: Fails with an error when the conversion is impossible - use TRY_CAST to get NULL instead. Always give varchar a length.
+See also: CONVERT, TRY_CAST
+
+=== Conversion & NULL handling | CONVERT
+Summary: Converts a value, with optional style codes for dates and numbers.
+Syntax:
+CONVERT(data_type [(length)], expression [, style])
+Example:
+SELECT CONVERT(varchar(10), GETDATE(), 23);    -- 2024-03-15   (yyyy-mm-dd)
+SELECT CONVERT(varchar(10), GETDATE(), 103);   -- 15/03/2024   (dd/mm/yyyy)
+SELECT CONVERT(varchar(8),  GETDATE(), 112);   -- 20240315     (yyyymmdd)
+SELECT CONVERT(varchar(19), GETDATE(), 120);   -- 2024-03-15 14:30:00
+SELECT CONVERT(varchar(30), GETDATE(), 126);   -- ISO 8601
+Notes: Common styles: 101 mm/dd/yyyy, 103 dd/mm/yyyy, 108 hh:mi:ss, 112 yyyymmdd, 120 yyyy-mm-dd hh:mi:ss, 121 with milliseconds. Unlike CAST, CONVERT is T-SQL specific.
+See also: CAST, FORMAT
+
+=== Conversion & NULL handling | TRY_CAST / TRY_CONVERT | 2012+
+Summary: Like CAST/CONVERT but return NULL instead of failing.
+Syntax:
+TRY_CAST(expression AS data_type)
+TRY_CONVERT(data_type, expression [, style])
+Example:
+SELECT TRY_CAST('abc' AS int);               -- NULL
+SELECT TRY_CONVERT(date, '2024-13-45');      -- NULL
+SELECT * FROM dbo.Imports WHERE TRY_CAST(Amount AS decimal(10,2)) IS NULL;   -- find bad rows
+Notes: Ideal for cleaning imported text data.
+See also: CAST, CONVERT, ISNUMERIC
+
+=== Conversion & NULL handling | PARSE / TRY_PARSE | 2012+
+Summary: Converts text to date or number using a culture.
+Syntax:
+PARSE(string AS data_type [USING culture])
+TRY_PARSE(string AS data_type [USING culture])
+Example:
+SELECT PARSE('15/03/2024' AS date USING 'pt-PT');
+SELECT TRY_PARSE('1.234,56' AS decimal(10,2) USING 'pt-PT');   -- 1234.56
+Notes: Slow (uses the CLR); fine for small sets.
+See also: TRY_CAST / TRY_CONVERT
+
+=== Conversion & NULL handling | ISNULL
+Summary: Replaces NULL with another value.
+Syntax:
+ISNULL(check_expression, replacement)
+Example:
+SELECT ISNULL(MiddleName, '') FROM dbo.People;
+SELECT Salary + ISNULL(Bonus, 0) FROM dbo.Employees;
+Notes: The result takes the data type of the first argument, so ISNULL(varchar(2), 'long text') is truncated. ISNULL takes two arguments; COALESCE takes any number.
+See also: COALESCE, NULLIF
+
+=== Conversion & NULL handling | COALESCE
+Summary: First non-NULL value in a list.
+Syntax:
+COALESCE(expr1, expr2 [, ...n])
+Example:
+SELECT COALESCE(MobilePhone, WorkPhone, HomePhone, 'n/a') FROM dbo.Contacts;
+SELECT COALESCE(SUM(Total), 0) FROM dbo.Orders WHERE 1 = 0;   -- 0
+Notes: ANSI standard. The result type is the highest-precedence type among the arguments.
+See also: ISNULL, NULLIF
+
+=== Conversion & NULL handling | NULLIF
+Summary: Returns NULL when two values are equal.
+Syntax:
+NULLIF(expression1, expression2)
+Example:
+-- Avoid divide-by-zero
+SELECT Revenue / NULLIF(Orders, 0) AS AvgOrder FROM dbo.Stats;
+
+-- Treat empty strings as NULL
+SELECT NULLIF(LTRIM(RTRIM(Phone)), '') FROM dbo.Contacts;
+See also: COALESCE, ISNULL
+
+=== Conversion & NULL handling | IIF | 2012+
+Summary: Inline IF - returns one of two values.
+Syntax:
+IIF(boolean_expression, value_if_true, value_if_false)
+Example:
+SELECT Name, IIF(Stock > 0, 'In stock', 'Out of stock') AS Availability FROM dbo.Products;
+Notes: Shorthand for a simple CASE expression.
+See also: CASE, CHOOSE
+
+=== Conversion & NULL handling | CHOOSE | 2012+
+Summary: Picks the item at a given position.
+Syntax:
+CHOOSE(index, value1, value2 [, ...])
+Example:
+SELECT CHOOSE(2, 'Low', 'Medium', 'High');     -- 'Medium'
+SELECT CHOOSE(MONTH(GETDATE()), 'Q1','Q1','Q1','Q2','Q2','Q2','Q3','Q3','Q3','Q4','Q4','Q4');
+Notes: The index is 1-based; an out-of-range index returns NULL.
+See also: CASE, IIF
+
+=== Conversion & NULL handling | GREATEST / LEAST | 2022+
+Summary: Largest or smallest value across several expressions.
+Syntax:
+GREATEST(expr1, expr2 [, ...])
+LEAST(expr1, expr2 [, ...])
+Example:
+SELECT GREATEST(1, 5, 3), LEAST(1, 5, 3);   -- 5, 1
+SELECT GREATEST(LastLogin, LastPurchase) FROM dbo.Customers;
+Notes: Row-wise (not an aggregate - for that use MAX/MIN). On older versions use a CASE or CROSS APPLY (VALUES ...).
+See also: MIN / MAX, CASE
+
+=== Conversion & NULL handling | ISNUMERIC
+Summary: Tests whether a string looks like a number.
+Syntax:
+ISNUMERIC(expression)    -- 1 or 0
+Example:
+SELECT ISNUMERIC('123'), ISNUMERIC('12a'), ISNUMERIC('$'), ISNUMERIC(',');   -- 1, 0, 1, 1
+Notes: Returns 1 for currency symbols, commas and more - unreliable. Use TRY_CAST(value AS decimal(18,4)) IS NOT NULL.
+See also: TRY_CAST / TRY_CONVERT
+
+=== Conversion & NULL handling | NEWID
+Summary: Generates a new GUID.
+Syntax:
+NEWID()
+NEWSEQUENTIALID()    -- only as a column DEFAULT, avoids index fragmentation
+Example:
+SELECT NEWID();
+SELECT TOP (5) * FROM dbo.Customers ORDER BY NEWID();   -- 5 random rows
+Notes: Random GUID keys fragment a clustered index; NEWSEQUENTIALID() or an int identity is friendlier.
+See also: RAND
+
+=== Window & ranking | OVER clause
+Summary: Runs a function over a window of rows without collapsing them.
+Syntax:
+function(...) OVER (
+    [PARTITION BY column [, ...]]
+    [ORDER BY column [ASC | DESC] [, ...]]
+    [ROWS | RANGE BETWEEN frame_start AND frame_end]
+)
+
+Frame bounds: UNBOUNDED PRECEDING, n PRECEDING, CURRENT ROW, n FOLLOWING, UNBOUNDED FOLLOWING
+Example:
+SELECT OrderId, CustomerId, Total,
+       SUM(Total) OVER (PARTITION BY CustomerId) AS CustomerTotal,
+       Total * 100.0 / SUM(Total) OVER (PARTITION BY CustomerId) AS PctOfCustomer
+FROM   dbo.Orders;
+Notes: PARTITION BY is like GROUP BY for the window; ORDER BY inside OVER orders the window, not the output.
+See also: ROW_NUMBER, SUM running total
+
+=== Window & ranking | ROW_NUMBER
+Summary: Sequential number for each row in a partition.
+Syntax:
+ROW_NUMBER() OVER ([PARTITION BY ...] ORDER BY ...)
+Example:
+-- Latest order per customer
+WITH x AS (
+    SELECT *, ROW_NUMBER() OVER (PARTITION BY CustomerId ORDER BY OrderDate DESC) AS rn
+    FROM   dbo.Orders
+)
+SELECT * FROM x WHERE rn = 1;
+
+-- Remove duplicates, keep the first
+WITH d AS (
+    SELECT ROW_NUMBER() OVER (PARTITION BY Email ORDER BY CustomerId) AS rn FROM dbo.Customers
+)
+DELETE FROM d WHERE rn > 1;
+Notes: ORDER BY is required. Numbers are unique even for ties.
+See also: RANK, DENSE_RANK, WITH (CTE)
+
+=== Window & ranking | RANK / DENSE_RANK
+Summary: Ranks rows; ties share a rank.
+Syntax:
+RANK()       OVER ([PARTITION BY ...] ORDER BY ...)   -- 1,2,2,4
+DENSE_RANK() OVER ([PARTITION BY ...] ORDER BY ...)   -- 1,2,2,3
+Example:
+SELECT Name, Salary,
+       RANK()       OVER (ORDER BY Salary DESC) AS Rnk,
+       DENSE_RANK() OVER (ORDER BY Salary DESC) AS DenseRnk
+FROM   dbo.Employees;
+Notes: RANK leaves gaps after ties; DENSE_RANK does not.
+See also: ROW_NUMBER, NTILE
+
+=== Window & ranking | NTILE
+Summary: Splits rows into N roughly equal groups.
+Syntax:
+NTILE(n) OVER ([PARTITION BY ...] ORDER BY ...)
+Example:
+SELECT CustomerId, Spent, NTILE(4) OVER (ORDER BY Spent DESC) AS Quartile
+FROM   dbo.CustomerTotals;
+See also: ROW_NUMBER
+
+=== Window & ranking | LAG / LEAD | 2012+
+Summary: Value from a previous or following row.
+Syntax:
+LAG(expression [, offset [, default]])  OVER ([PARTITION BY ...] ORDER BY ...)
+LEAD(expression [, offset [, default]]) OVER ([PARTITION BY ...] ORDER BY ...)
+Example:
+SELECT OrderDate, Total,
+       LAG(Total)  OVER (ORDER BY OrderDate) AS PreviousTotal,
+       Total - LAG(Total, 1, 0) OVER (ORDER BY OrderDate) AS Change
+FROM   dbo.DailySales;
+Notes: Returns NULL (or the default) when there is no such row. Replaces self-joins for "compare with previous row".
+See also: OVER clause
+
+=== Window & ranking | FIRST_VALUE / LAST_VALUE | 2012+
+Summary: First or last value in the window.
+Syntax:
+FIRST_VALUE(expr) OVER (PARTITION BY ... ORDER BY ... [frame])
+LAST_VALUE(expr)  OVER (PARTITION BY ... ORDER BY ... [frame])
+Example:
+SELECT EmployeeId, DepartmentId, Salary,
+       FIRST_VALUE(Salary) OVER (PARTITION BY DepartmentId ORDER BY Salary DESC) AS DeptMax,
+       LAST_VALUE(Salary)  OVER (PARTITION BY DepartmentId ORDER BY Salary DESC
+                                 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS DeptMin
+FROM   dbo.Employees;
+Notes: The default frame ends at the current row, so LAST_VALUE needs an explicit frame to see the whole partition.
+See also: OVER clause
+
+=== Window & ranking | SUM running total
+Summary: Cumulative sum using a window frame.
+Syntax:
+SUM(column) OVER (ORDER BY column ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+Example:
+SELECT OrderDate, Total,
+       SUM(Total) OVER (ORDER BY OrderDate, OrderId
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS RunningTotal
+FROM   dbo.Orders;
+
+-- Moving average of the last 3 rows
+SELECT OrderDate, AVG(Total) OVER (ORDER BY OrderDate ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM dbo.Orders;
+Notes: Always specify ROWS - the default (RANGE) is slower and treats ties differently.
+See also: OVER clause
+
+=== JSON & XML | JSON_VALUE | 2016+
+Summary: Extracts a scalar value from JSON text.
+Syntax:
+JSON_VALUE(json_text, '$.path')
+Example:
+DECLARE @j nvarchar(max) = N'{"name":"Ana","address":{"city":"Lisbon"},"tags":["a","b"]}';
+SELECT JSON_VALUE(@j, '$.name'),            -- Ana
+       JSON_VALUE(@j, '$.address.city'),    -- Lisbon
+       JSON_VALUE(@j, '$.tags[1]');         -- b
+Notes: Returns nvarchar(4000); for objects or arrays use JSON_QUERY. Returns NULL (lax mode) if the path does not exist.
+See also: JSON_QUERY, OPENJSON, ISJSON
+
+=== JSON & XML | JSON_QUERY | 2016+
+Summary: Extracts an object or array from JSON text.
+Syntax:
+JSON_QUERY(json_text, '$.path')
+Example:
+SELECT JSON_QUERY(@j, '$.address');   -- {"city":"Lisbon"}
+SELECT JSON_QUERY(@j, '$.tags');      -- ["a","b"]
+See also: JSON_VALUE, OPENJSON
+
+=== JSON & XML | JSON_MODIFY | 2016+
+Summary: Updates a value inside JSON text.
+Syntax:
+JSON_MODIFY(json_text, '$.path', new_value)
+Example:
+SET @j = JSON_MODIFY(@j, '$.name', 'Rita');
+SET @j = JSON_MODIFY(@j, '$.age', 30);
+SET @j = JSON_MODIFY(@j, 'append $.tags', 'c');
+SET @j = JSON_MODIFY(@j, '$.address', NULL);    -- removes the property
+See also: JSON_VALUE
+
+=== JSON & XML | OPENJSON | 2016+
+Summary: Turns JSON into rows and columns.
+Syntax:
+OPENJSON(json_text [, '$.path']) [WITH (column type '$.path' [AS JSON], ...)]
+Example:
+DECLARE @j nvarchar(max) = N'[{"id":1,"name":"Ana"},{"id":2,"name":"Rui"}]';
+SELECT *
+FROM   OPENJSON(@j)
+WITH   (Id int '$.id', Name nvarchar(50) '$.name');
+Notes: Without WITH it returns key, value and type columns. Needs compatibility level 130+.
+See also: JSON_VALUE, FOR JSON, STRING_SPLIT
+
+=== JSON & XML | FOR JSON | 2016+
+Summary: Returns a query result as JSON.
+Syntax:
+SELECT ... FROM ... FOR JSON PATH [, ROOT('name')] [, INCLUDE_NULL_VALUES] [, WITHOUT_ARRAY_WRAPPER]
+FOR JSON AUTO
+Example:
+SELECT CustomerId AS id, Name AS name
+FROM   dbo.Customers
+FOR JSON PATH, ROOT('customers');
+
+-- Nested objects with dotted aliases
+SELECT Name AS 'person.name', City AS 'person.address.city' FROM dbo.Customers FOR JSON PATH;
+See also: OPENJSON, ISJSON
+
+=== JSON & XML | ISJSON | 2016+
+Summary: Tests whether text is valid JSON.
+Syntax:
+ISJSON(expression)    -- 1 or 0 (NULL for NULL)
+Example:
+SELECT ISJSON('{"a":1}'), ISJSON('not json');   -- 1, 0
+ALTER TABLE dbo.Events ADD CONSTRAINT CK_Events_Json CHECK (ISJSON(Payload) = 1);
+See also: JSON_VALUE, OPENJSON
+
+=== JSON & XML | FOR XML PATH
+Summary: Returns rows as XML - also the classic way to concatenate values.
+Syntax:
+SELECT ... FROM ... FOR XML PATH('row_name') [, ROOT('root')] [, TYPE]
+Example:
+-- Comma-separated list (before STRING_AGG existed)
+SELECT STUFF((SELECT ', ' + Name
+              FROM   dbo.Departments
+              ORDER BY Name
+              FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, 2, '');
+Notes: On SQL Server 2017+ prefer STRING_AGG. The .value('.', 'nvarchar(max)') call prevents special characters from being escaped.
+See also: STRING_AGG, STUFF
+
+=== Programming (T-SQL) | DECLARE / SET
+Summary: Declares and assigns variables.
+Syntax:
+DECLARE @name data_type [= initial_value] [, @name2 data_type ...];
+SET    @name = value;
+SELECT @name = column FROM table WHERE ...;
+Example:
+DECLARE @CustomerId int = 42, @Name nvarchar(100), @Total money;
+
+SET @Name = N'Contoso';
+SELECT @Total = SUM(Total) FROM dbo.Orders WHERE CustomerId = @CustomerId;
+
+SELECT @CustomerId AS Id, @Name AS Name, @Total AS Total;
+Notes: Variables live until the end of the batch (GO). If SELECT @x = col matches several rows, the last row wins; if none, the variable keeps its old value.
+See also: IF / ELSE, WHILE
+
+=== Programming (T-SQL) | IF / ELSE
+Summary: Conditional execution.
+Syntax:
+IF condition
+    statement | BEGIN ... END
+[ELSE
+    statement | BEGIN ... END]
+Example:
+IF EXISTS (SELECT 1 FROM dbo.Orders WHERE Status = 'Open')
+BEGIN
+    PRINT 'There are open orders';
+END
+ELSE
+BEGIN
+    PRINT 'No open orders';
+END;
+
+IF OBJECT_ID('dbo.Temp', 'U') IS NOT NULL DROP TABLE dbo.Temp;
+Notes: Without BEGIN...END only the next statement belongs to the IF.
+See also: CASE, EXISTS, WHILE
+
+=== Programming (T-SQL) | WHILE
+Summary: Loop while a condition is true.
+Syntax:
+WHILE condition
+BEGIN
+    ...
+    [BREAK | CONTINUE]
+END
+Example:
+DECLARE @i int = 1;
+WHILE @i <= 5
+BEGIN
+    PRINT 'Step ' + CAST(@i AS varchar(10));
+    SET @i += 1;
+END;
+Notes: Do not forget to change the loop variable. Prefer set-based statements over row-by-row loops whenever possible.
+See also: CURSOR, IF / ELSE
+
+=== Programming (T-SQL) | CREATE PROCEDURE
+Summary: Stored procedure - reusable, parameterized T-SQL.
+Syntax:
+CREATE [OR ALTER] PROCEDURE schema.name
+    @param1 data_type [= default] [, @param2 data_type OUTPUT]
+AS
+BEGIN
+    SET NOCOUNT ON;
+    ...
+END;
+Example:
+CREATE OR ALTER PROCEDURE dbo.GetCustomerOrders
+    @CustomerId int,
+    @OnlyOpen   bit = 0,
+    @OrderCount int OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT OrderId, OrderDate, Total
+    FROM   dbo.Orders
+    WHERE  CustomerId = @CustomerId
+      AND (@OnlyOpen = 0 OR Status = 'Open');
+
+    SET @OrderCount = @@ROWCOUNT;
+END;
+GO
+DECLARE @n int;
+EXEC dbo.GetCustomerOrders @CustomerId = 42, @OrderCount = @n OUTPUT;
+SELECT @n AS Orders;
+Notes: CREATE OR ALTER needs SQL Server 2016 SP1+. Must be the first statement in a batch. Use RETURN for a status code and OUTPUT parameters for values.
+See also: EXEC, SET NOCOUNT, TRY...CATCH
+
+=== Programming (T-SQL) | EXEC / EXECUTE
+Summary: Runs a stored procedure or a string of SQL.
+Syntax:
+EXEC [@return_status =] procedure_name [@param = value [OUTPUT]] [, ...];
+EXEC (@sql_string);
+Example:
+EXEC dbo.GetCustomerOrders @CustomerId = 42, @OrderCount = @n OUTPUT;
+EXEC sp_who2;
+EXEC ('SELECT 1');      -- dynamic SQL (see sp_executesql for the safe way)
+Notes: Name your parameters so calls survive later changes to the procedure.
+See also: sp_executesql, CREATE PROCEDURE
+
+=== Programming (T-SQL) | sp_executesql
+Summary: Runs dynamic SQL with parameters (avoids SQL injection and enables plan reuse).
+Syntax:
+EXEC sp_executesql @stmt = N'sql text with @params',
+                   @params = N'@p1 type, @p2 type OUTPUT',
+                   @p1 = value1, @p2 = @var OUTPUT;
+Example:
+DECLARE @sql nvarchar(max), @count int;
+SET @sql = N'SELECT @cnt = COUNT(*) FROM ' + QUOTENAME(@table) + N' WHERE Status = @status';
+
+EXEC sp_executesql @sql,
+     N'@status varchar(20), @cnt int OUTPUT',
+     @status = 'Open', @cnt = @count OUTPUT;
+Notes: The statement must be nvarchar. Concatenate only object names (wrapped in QUOTENAME) - pass values as parameters, never by string concatenation.
+See also: QUOTENAME, EXEC
+
+=== Programming (T-SQL) | CREATE FUNCTION
+Summary: User-defined function (scalar or table-valued).
+Syntax:
+-- Scalar
+CREATE [OR ALTER] FUNCTION schema.name (@p type [, ...]) RETURNS type AS
+BEGIN
+    RETURN expression;
+END;
+
+-- Inline table-valued (preferred)
+CREATE [OR ALTER] FUNCTION schema.name (@p type) RETURNS TABLE AS
+RETURN (SELECT ...);
+Example:
+CREATE OR ALTER FUNCTION dbo.fnFullName (@First nvarchar(50), @Last nvarchar(50))
+RETURNS nvarchar(101)
+AS
+BEGIN
+    RETURN CONCAT(@First, N' ', @Last);
+END;
+GO
+CREATE OR ALTER FUNCTION dbo.fnOrdersByCustomer (@CustomerId int)
+RETURNS TABLE
+AS
+RETURN (SELECT OrderId, Total FROM dbo.Orders WHERE CustomerId = @CustomerId);
+GO
+SELECT dbo.fnFullName(FirstName, LastName) FROM dbo.People;
+SELECT * FROM dbo.fnOrdersByCustomer(42);
+Notes: Inline table-valued functions perform like parameterized views; multi-statement and scalar functions can be slow on large sets (scalar inlining arrived in SQL Server 2019).
+See also: CREATE VIEW, CROSS APPLY / OUTER APPLY
+
+=== Programming (T-SQL) | CREATE TRIGGER
+Summary: Code that runs automatically on INSERT, UPDATE or DELETE.
+Syntax:
+CREATE [OR ALTER] TRIGGER schema.trigger_name
+ON schema.table
+{AFTER | INSTEAD OF} {INSERT | UPDATE | DELETE} [, ...]
+AS
+BEGIN
+    SET NOCOUNT ON;
+    ...   -- use the inserted and deleted pseudo-tables
+END;
+Example:
+CREATE OR ALTER TRIGGER dbo.trg_Employees_Touch
+ON dbo.Employees
+AFTER UPDATE
+AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE e SET ModifiedAt = SYSDATETIME()
+    FROM   dbo.Employees AS e
+    JOIN   inserted AS i ON i.EmployeeId = e.EmployeeId;
+END;
+Notes: A trigger fires once per statement, not per row - always handle multi-row inserted/deleted. Keep triggers short; hidden logic makes troubleshooting harder.
+See also: OUTPUT clause
+
+=== Programming (T-SQL) | CURSOR
+Summary: Processes a result set one row at a time.
+Syntax:
+DECLARE cursor_name CURSOR [LOCAL] [FAST_FORWARD] FOR select_statement;
+OPEN cursor_name;
+FETCH NEXT FROM cursor_name INTO @var1 [, @var2 ...];
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    ...
+    FETCH NEXT FROM cursor_name INTO @var1 [, @var2 ...];
+END;
+CLOSE cursor_name;
+DEALLOCATE cursor_name;
+Example:
+DECLARE @Id int, @Name nvarchar(100);
+DECLARE c CURSOR LOCAL FAST_FORWARD FOR SELECT CustomerId, Name FROM dbo.Customers;
+OPEN c;
+FETCH NEXT FROM c INTO @Id, @Name;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    PRINT CONCAT(@Id, ' - ', @Name);
+    FETCH NEXT FROM c INTO @Id, @Name;
+END;
+CLOSE c;
+DEALLOCATE c;
+Notes: Slow compared to set-based SQL; use only when each row really needs its own procedure call.
+See also: WHILE
+
+=== Programming (T-SQL) | PRINT / RAISERROR WITH NOWAIT
+Summary: Sends messages to the client.
+Syntax:
+PRINT message;
+RAISERROR (message, 0, 1) WITH NOWAIT;
+Example:
+PRINT 'Started at ' + CONVERT(varchar(30), GETDATE(), 120);
+RAISERROR ('Processed %d rows', 0, 1, @rows) WITH NOWAIT;   -- shows immediately
+Notes: PRINT output may be buffered until the batch ends; RAISERROR ... WITH NOWAIT with severity 0 flushes progress messages right away.
+See also: RAISERROR, THROW
+
+=== Programming (T-SQL) | SET NOCOUNT
+Summary: Stops the "(n rows affected)" messages.
+Syntax:
+SET NOCOUNT { ON | OFF }
+Example:
+CREATE OR ALTER PROCEDURE dbo.DoWork AS
+BEGIN
+    SET NOCOUNT ON;
+    UPDATE dbo.Orders SET Status = 'Closed' WHERE ShippedOn IS NOT NULL;
+END;
+Notes: Good practice at the top of every procedure and trigger - less network chatter and fewer surprises for client libraries.
+See also: @@ROWCOUNT, CREATE PROCEDURE
+
+=== Programming (T-SQL) | @@ROWCOUNT
+Summary: Rows affected by the previous statement.
+Syntax:
+@@ROWCOUNT
+ROWCOUNT_BIG()
+Example:
+UPDATE dbo.Orders SET Status = 'Closed' WHERE ShippedOn IS NOT NULL;
+IF @@ROWCOUNT = 0 PRINT 'Nothing to update';
+Notes: Read it immediately: almost any following statement (even IF or PRINT) resets it. Copy it into a variable if you need it later.
+See also: SET NOCOUNT, SCOPE_IDENTITY
+
+=== Programming (T-SQL) | SCOPE_IDENTITY
+Summary: The last identity value generated in your scope.
+Syntax:
+SCOPE_IDENTITY()
+Example:
+INSERT INTO dbo.Orders (CustomerId, Total) VALUES (42, 99.90);
+DECLARE @OrderId int = SCOPE_IDENTITY();
+INSERT INTO dbo.OrderLines (OrderId, Sku) VALUES (@OrderId, 'ABC-1');
+Notes: Safer than @@IDENTITY (which also sees identities created by triggers). For multi-row inserts use the OUTPUT clause.
+See also: IDENTITY, OUTPUT clause
+
+=== Programming (T-SQL) | WAITFOR
+Summary: Pauses execution.
+Syntax:
+WAITFOR DELAY 'hh:mm:ss';
+WAITFOR TIME 'hh:mm:ss';
+Example:
+WAITFOR DELAY '00:00:05';   -- wait 5 seconds
+Notes: Useful for retry loops and tests.
+See also: WHILE
+
+=== Programming (T-SQL) | GO / USE
+Summary: Batch separator and database switch.
+Syntax:
+GO [count]
+USE database_name;
+Example:
+USE Sales;
+GO
+SELECT DB_NAME();
+GO 5       -- run the previous batch 5 times
+Notes: GO is understood by SSMS, sqlcmd and Azure Data Studio - it is not a T-SQL statement. Variables do not survive a GO. USE is not allowed in Azure SQL Database.
+See also: CREATE VIEW, DECLARE / SET
+
+=== Transactions & errors | BEGIN TRANSACTION
+Summary: Groups statements so they succeed or fail together.
+Syntax:
+BEGIN TRAN[SACTION] [name];
+    ...
+COMMIT [TRAN[SACTION]] [name];
+ROLLBACK [TRAN[SACTION]] [name];
+Example:
+BEGIN TRANSACTION;
+
+UPDATE dbo.Accounts SET Balance = Balance - 100 WHERE AccountId = 1;
+UPDATE dbo.Accounts SET Balance = Balance + 100 WHERE AccountId = 2;
+
+SELECT AccountId, Balance FROM dbo.Accounts WHERE AccountId IN (1, 2);   -- check the result first
+
+COMMIT TRANSACTION;       -- keep the changes
+-- ROLLBACK TRANSACTION;  -- ...or undo them
+Notes: A transaction holds locks until it ends, so keep it short and never leave one open. For real code wrap it in TRY...CATCH with SET XACT_ABORT ON (see TRY...CATCH). Running a risky UPDATE with ROLLBACK first is a good way to test it.
+See also: TRY...CATCH, SET XACT_ABORT, @@TRANCOUNT
+
+=== Transactions & errors | TRY...CATCH
+Summary: Structured error handling with rollback.
+Syntax:
+BEGIN TRY
+    ...
+END TRY
+BEGIN CATCH
+    ...   -- ERROR_MESSAGE(), ERROR_NUMBER() ...
+END CATCH;
+Example:
+SET XACT_ABORT ON;
+BEGIN TRY
+    BEGIN TRANSACTION;
+        UPDATE dbo.Accounts SET Balance = Balance - 100 WHERE AccountId = 1;
+        UPDATE dbo.Accounts SET Balance = Balance + 100 WHERE AccountId = 2;
+    COMMIT TRANSACTION;
+END TRY
+BEGIN CATCH
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    THROW;     -- re-raise the original error
+END CATCH;
+Notes: Errors with severity 20+ and some compile errors are not caught. THROW without arguments re-raises the error in a CATCH block.
+See also: THROW, ERROR_MESSAGE, BEGIN TRANSACTION
+
+=== Transactions & errors | THROW | 2012+
+Summary: Raises an error.
+Syntax:
+THROW [error_number, message, state];
+THROW;      -- re-throw inside CATCH
+Example:
+IF @Qty <= 0
+    THROW 50001, 'Quantity must be positive.', 1;
+Notes: error_number must be 50000 or higher. The statement before THROW must end with a semicolon.
+See also: RAISERROR, TRY...CATCH
+
+=== Transactions & errors | RAISERROR
+Summary: Raises an error or message with formatting (older style).
+Syntax:
+RAISERROR (message_or_id, severity, state [, argument ...]) [WITH NOWAIT | LOG]
+Example:
+RAISERROR ('Customer %d not found', 16, 1, @CustomerId);
+RAISERROR ('Progress: %d%%', 0, 1, @pct) WITH NOWAIT;
+Notes: Severity 0-10 is informational, 11-16 are user errors. THROW is preferred for new code, RAISERROR when you need printf-style formatting or WITH NOWAIT.
+See also: THROW, PRINT / RAISERROR WITH NOWAIT
+
+=== Transactions & errors | ERROR_MESSAGE()
+Summary: Error details available inside a CATCH block.
+Syntax:
+ERROR_NUMBER()   ERROR_MESSAGE()   ERROR_SEVERITY()
+ERROR_STATE()    ERROR_LINE()      ERROR_PROCEDURE()
+Example:
+BEGIN CATCH
+    SELECT ERROR_NUMBER()    AS Number,
+           ERROR_MESSAGE()   AS Message,
+           ERROR_LINE()      AS Line,
+           ERROR_PROCEDURE() AS Proc;
+END CATCH;
+Notes: They return NULL outside a CATCH block.
+See also: TRY...CATCH, THROW
+
+=== Transactions & errors | SET XACT_ABORT
+Summary: Rolls the whole transaction back automatically on a runtime error.
+Syntax:
+SET XACT_ABORT { ON | OFF }
+Example:
+SET XACT_ABORT ON;
+BEGIN TRANSACTION;
+    -- any error here aborts and rolls back the transaction
+COMMIT;
+Notes: Recommended ON for procedures that open transactions.
+See also: BEGIN TRANSACTION, TRY...CATCH
+
+=== Transactions & errors | SET TRANSACTION ISOLATION LEVEL
+Summary: Controls how transactions see each other's changes.
+Syntax:
+SET TRANSACTION ISOLATION LEVEL
+    { READ UNCOMMITTED | READ COMMITTED | REPEATABLE READ | SNAPSHOT | SERIALIZABLE };
+Example:
+SET TRANSACTION ISOLATION LEVEL SNAPSHOT;     -- needs ALLOW_SNAPSHOT_ISOLATION ON
+BEGIN TRANSACTION;
+    SELECT * FROM dbo.Accounts;
+COMMIT;
+
+ALTER DATABASE Sales SET READ_COMMITTED_SNAPSHOT ON;   -- readers stop blocking writers
+Notes: READ COMMITTED (default) can block; READ UNCOMMITTED allows dirty reads; SNAPSHOT / RCSI use row versions and avoid most reader-writer blocking at the cost of tempdb space.
+See also: Table hints (NOLOCK...), BEGIN TRANSACTION
+
+=== Transactions & errors | @@TRANCOUNT
+Summary: Number of open transactions in the session.
+Syntax:
+@@TRANCOUNT
+Example:
+IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+Notes: Each BEGIN TRAN adds 1, each COMMIT removes 1, a ROLLBACK removes all. Check it before rolling back in a CATCH block.
+See also: BEGIN TRANSACTION, TRY...CATCH
+
+=== Transactions & errors | SAVE TRANSACTION
+Summary: A savepoint you can roll back to without losing the whole transaction.
+Syntax:
+SAVE TRANSACTION savepoint_name;
+ROLLBACK TRANSACTION savepoint_name;
+Example:
+BEGIN TRANSACTION;
+    INSERT INTO dbo.Log (Msg) VALUES ('step 1');
+    SAVE TRANSACTION AfterStep1;
+    INSERT INTO dbo.Log (Msg) VALUES ('step 2');
+    ROLLBACK TRANSACTION AfterStep1;      -- undoes step 2 only
+COMMIT TRANSACTION;
+See also: BEGIN TRANSACTION
+
+=== System & metadata | @@VERSION / SERVERPROPERTY
+Summary: Version and edition of the server.
+Syntax:
+SELECT @@VERSION;
+SELECT SERVERPROPERTY('ProductVersion'), SERVERPROPERTY('Edition'), SERVERPROPERTY('ProductLevel');
+Example:
+SELECT @@SERVERNAME AS Server,
+       SERVERPROPERTY('ProductVersion') AS Version,
+       SERVERPROPERTY('Edition') AS Edition,
+       DB_NAME() AS CurrentDatabase;
+Notes: Major versions: 15 = 2019, 16 = 2022, 14 = 2017, 13 = 2016, 12 = 2014, 11 = 2012.
+See also: DB_NAME / USER_NAME
+
+=== System & metadata | DB_NAME / USER_NAME
+Summary: Current database and user identity.
+Syntax:
+DB_NAME()   SUSER_SNAME()   SYSTEM_USER   USER_NAME()   ORIGINAL_LOGIN()   @@SPID   HOST_NAME()   APP_NAME()
+Example:
+SELECT DB_NAME() AS Db, SUSER_SNAME() AS LoginName, USER_NAME() AS DbUser, @@SPID AS Session, HOST_NAME() AS Client;
+Notes: SUSER_SNAME() is the server login; USER_NAME() is the user inside the database.
+See also: @@VERSION / SERVERPROPERTY
+
+=== System & metadata | List tables and columns
+Summary: Explore a database through the catalog views.
+Syntax:
+sys.tables, sys.columns, sys.schemas, sys.types, sys.indexes, sys.objects
+INFORMATION_SCHEMA.TABLES / COLUMNS / ROUTINES
+Example:
+-- All columns of all tables
+SELECT s.name AS SchemaName, t.name AS TableName, c.name AS ColumnName,
+       ty.name AS DataType, c.max_length, c.is_nullable
+FROM   sys.tables  AS t
+JOIN   sys.schemas AS s  ON s.schema_id = t.schema_id
+JOIN   sys.columns AS c  ON c.object_id = t.object_id
+JOIN   sys.types   AS ty ON ty.user_type_id = c.user_type_id
+ORDER BY s.name, t.name, c.column_id;
+
+-- Which tables have a column called CustomerId?
+SELECT TABLE_SCHEMA, TABLE_NAME
+FROM   INFORMATION_SCHEMA.COLUMNS
+WHERE  COLUMN_NAME = 'CustomerId';
+
+-- Find objects by name
+SELECT name, type_desc FROM sys.objects WHERE name LIKE '%Order%';
+Notes: max_length is in bytes (nvarchar(50) shows 100; MAX shows -1).
+See also: OBJECT_ID, sp_help
+
+=== System & metadata | OBJECT_ID / OBJECT_NAME
+Summary: Converts between object names and ids; reads object definitions.
+Syntax:
+OBJECT_ID('schema.object' [, 'type'])      -- NULL if it does not exist
+OBJECT_NAME(object_id)
+OBJECT_DEFINITION(object_id)               -- text of a view, procedure, function...
+Example:
+IF OBJECT_ID('dbo.Orders', 'U') IS NOT NULL PRINT 'Table exists';
+SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.GetCustomerOrders'));
+Notes: Common type codes: U table, V view, P procedure, FN scalar function, IF inline table function, TR trigger.
+See also: DROP TABLE, sp_help
+
+=== System & metadata | sp_help / sp_helptext / sp_spaceused
+Summary: Quick object information from the command line.
+Syntax:
+EXEC sp_help 'schema.object';
+EXEC sp_helptext 'schema.procedure_or_view';
+EXEC sp_spaceused ['schema.table'];
+Example:
+EXEC sp_help 'dbo.Orders';            -- columns, indexes, constraints
+EXEC sp_helptext 'dbo.vOpenOrders';   -- source code
+EXEC sp_spaceused 'dbo.Orders';       -- rows and size
+EXEC sp_spaceused;                    -- whole database
+See also: List tables and columns, OBJECT_ID / OBJECT_NAME
+
+=== System & metadata | Running queries and sessions
+Summary: See what is running and who is blocking.
+Syntax:
+sys.dm_exec_requests, sys.dm_exec_sessions, sys.dm_exec_sql_text(sql_handle)
+sp_who / sp_who2
+KILL session_id
+Example:
+SELECT r.session_id, r.status, r.command, r.blocking_session_id, r.wait_type,
+       r.total_elapsed_time / 1000 AS seconds, t.text
+FROM   sys.dm_exec_requests AS r
+CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) AS t
+WHERE  r.session_id <> @@SPID;
+
+KILL 57;       -- end session 57 (it will roll back)
+Notes: blocking_session_id <> 0 shows who is waiting for whom. Killing a session rolls back its work, which can take as long as the work itself. Needs VIEW SERVER STATE.
+See also: SET TRANSACTION ISOLATION LEVEL
+
+=== System & metadata | SET STATISTICS IO / TIME
+Summary: Shows reads and CPU time of a query.
+Syntax:
+SET STATISTICS IO ON;
+SET STATISTICS TIME ON;
+Example:
+SET STATISTICS IO, TIME ON;
+SELECT * FROM dbo.Orders WHERE CustomerId = 42;
+SET STATISTICS IO, TIME OFF;
+Notes: Compare "logical reads" before and after adding an index. In SSMS enable "Include Actual Execution Plan" (Ctrl+M) for the graphical plan.
+See also: CREATE INDEX
+
+=== System & metadata | Execution plans
+Summary: Show how SQL Server will (or did) run a query.
+Syntax:
+SET SHOWPLAN_XML ON;     -- estimated plan, query is NOT executed
+SET STATISTICS XML ON;   -- actual plan, query runs
+Example:
+SET SHOWPLAN_XML ON;
+GO
+SELECT * FROM dbo.Orders WHERE CustomerId = 42;
+GO
+SET SHOWPLAN_XML OFF;
+Notes: Look for scans on big tables, key lookups, large estimate-vs-actual differences and warnings.
+See also: SET STATISTICS IO / TIME, CREATE INDEX
+
+=== System & metadata | DBCC CHECKDB
+Summary: Checks the integrity of a database.
+Syntax:
+DBCC CHECKDB ([database_name]) [WITH NO_INFOMSGS, ALL_ERRORMSGS];
+Example:
+DBCC CHECKDB (Sales) WITH NO_INFOMSGS;
+Notes: Schedule it regularly (at least weekly). Never use REPAIR_ALLOW_DATA_LOSS without a backup and a good reason.
+See also: BACKUP DATABASE
+
+=== System & metadata | Index fragmentation
+Summary: Find and fix fragmented indexes.
+Syntax:
+sys.dm_db_index_physical_stats(db_id, object_id, index_id, partition, mode)
+ALTER INDEX name | ALL ON table REBUILD | REORGANIZE;
+UPDATE STATISTICS table [index];
+Example:
+SELECT OBJECT_NAME(ips.object_id) AS TableName, i.name AS IndexName,
+       ips.avg_fragmentation_in_percent, ips.page_count
+FROM   sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') AS ips
+JOIN   sys.indexes AS i ON i.object_id = ips.object_id AND i.index_id = ips.index_id
+WHERE  ips.avg_fragmentation_in_percent > 30 AND ips.page_count > 1000;
+
+ALTER INDEX IX_Orders_CustomerId ON dbo.Orders REBUILD;
+ALTER INDEX ALL ON dbo.Orders REORGANIZE;
+UPDATE STATISTICS dbo.Orders WITH FULLSCAN;
+Notes: Common guideline: REORGANIZE between 5% and 30%, REBUILD above 30%; ignore small indexes. A rebuild also refreshes statistics.
+See also: CREATE INDEX
+
+=== Security & admin | CREATE LOGIN / CREATE USER
+Summary: Creates a server login and a database user mapped to it.
+Syntax:
+CREATE LOGIN login_name WITH PASSWORD = 'password' [, CHECK_POLICY = ON];
+CREATE LOGIN [DOMAIN\user] FROM WINDOWS;
+USE database;
+CREATE USER user_name FOR LOGIN login_name [WITH DEFAULT_SCHEMA = dbo];
+Example:
+CREATE LOGIN app_user WITH PASSWORD = 'Str0ng!Passw0rd#2024', CHECK_POLICY = ON;
+GO
+USE Sales;
+CREATE USER app_user FOR LOGIN app_user;
+Notes: Prefer Windows/AD logins over SQL logins. A login connects to the server, a user gets access to one database.
+See also: ALTER ROLE, GRANT / DENY / REVOKE
+
+=== Security & admin | ALTER ROLE ... ADD MEMBER | 2012+
+Summary: Puts a user in a database role.
+Syntax:
+ALTER ROLE role_name ADD MEMBER user_name;
+ALTER ROLE role_name DROP MEMBER user_name;
+Example:
+ALTER ROLE db_datareader ADD MEMBER app_user;
+ALTER ROLE db_datawriter ADD MEMBER app_user;
+Notes: Fixed roles: db_owner, db_datareader, db_datawriter, db_ddladmin, db_securityadmin... Server roles use ALTER SERVER ROLE. Older versions use sp_addrolemember.
+See also: CREATE LOGIN / CREATE USER, GRANT / DENY / REVOKE
+
+=== Security & admin | GRANT / DENY / REVOKE
+Summary: Manages permissions.
+Syntax:
+GRANT permission [, ...] ON object TO principal [WITH GRANT OPTION];
+DENY  permission [, ...] ON object TO principal;
+REVOKE permission [, ...] ON object FROM principal;
+Example:
+GRANT SELECT, INSERT ON dbo.Orders TO app_user;
+GRANT EXECUTE ON SCHEMA::dbo TO app_user;
+DENY DELETE ON dbo.Orders TO app_user;
+REVOKE INSERT ON dbo.Orders FROM app_user;      -- removes a previous GRANT or DENY
+
+SELECT * FROM sys.fn_my_permissions('dbo.Orders', 'OBJECT');   -- what do I have?
+Notes: DENY always wins over GRANT. REVOKE removes the grant/deny; it is not the same as DENY.
+See also: ALTER ROLE ... ADD MEMBER
+
+=== Security & admin | BACKUP DATABASE
+Summary: Takes a full, differential or log backup.
+Syntax:
+BACKUP DATABASE db TO DISK = 'path.bak' [WITH COMPRESSION, CHECKSUM, INIT, STATS = 10];
+BACKUP DATABASE db TO DISK = 'path.dif' WITH DIFFERENTIAL;
+BACKUP LOG      db TO DISK = 'path.trn';
+Example:
+BACKUP DATABASE Sales
+TO DISK = N'D:\Backups\Sales_full.bak'
+WITH COMPRESSION, CHECKSUM, INIT, STATS = 10;
+
+BACKUP LOG Sales TO DISK = N'D:\Backups\Sales_log.trn' WITH COMPRESSION;
+RESTORE VERIFYONLY FROM DISK = N'D:\Backups\Sales_full.bak' WITH CHECKSUM;
+Notes: The path is on the server. Log backups need the FULL or BULK_LOGGED recovery model. A backup is only proven good when you have restored it.
+See also: RESTORE DATABASE, ALTER DATABASE
+
+=== Security & admin | RESTORE DATABASE
+Summary: Restores a database from a backup.
+Syntax:
+RESTORE FILELISTONLY FROM DISK = 'path.bak';
+RESTORE DATABASE db FROM DISK = 'path.bak'
+    [WITH MOVE 'logical_data' TO 'new.mdf', MOVE 'logical_log' TO 'new.ldf', REPLACE, RECOVERY | NORECOVERY, STATS = 10];
+Example:
+RESTORE FILELISTONLY FROM DISK = N'D:\Backups\Sales_full.bak';
+
+RESTORE DATABASE SalesCopy
+FROM DISK = N'D:\Backups\Sales_full.bak'
+WITH MOVE 'Sales'     TO N'D:\Data\SalesCopy.mdf',
+     MOVE 'Sales_log' TO N'D:\Data\SalesCopy.ldf',
+     STATS = 10;
+Notes: Use NORECOVERY when you still have to restore differential or log backups, then finish with RESTORE DATABASE db WITH RECOVERY. REPLACE overwrites an existing database - be careful.
+See also: BACKUP DATABASE
+
+=== Security & admin | ALTER DATABASE
+Summary: Changes database options.
+Syntax:
+ALTER DATABASE db SET RECOVERY { FULL | SIMPLE | BULK_LOGGED };
+ALTER DATABASE db SET { SINGLE_USER | MULTI_USER } [WITH ROLLBACK IMMEDIATE];
+ALTER DATABASE db SET { READ_ONLY | READ_WRITE };
+ALTER DATABASE db MODIFY NAME = new_name;
+ALTER DATABASE db SET COMPATIBILITY_LEVEL = 150;
+Example:
+ALTER DATABASE Sales SET RECOVERY SIMPLE;
+
+ALTER DATABASE Sales SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+-- ...maintenance...
+ALTER DATABASE Sales SET MULTI_USER;
+Notes: SIMPLE recovery means no point-in-time restore and no log backups. WITH ROLLBACK IMMEDIATE disconnects other sessions at once.
+See also: BACKUP DATABASE, CREATE DATABASE
