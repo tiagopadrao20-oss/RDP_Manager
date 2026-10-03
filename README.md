@@ -14,13 +14,30 @@ Double-click `Launch-RDPManager.cmd` (or run `RDPManager.ps1` with Windows Power
 - **Library** with search, favorites, edit, remove, and a right-click menu.
 - Shortcuts: `Ctrl+F` search, `Enter` connect, `F2` edit, `Del` remove, `Esc` clear search.
 
+## AD Toolkit
+
+A second tool in the same style, for four everyday AD / network checks. Run it with `Launch-ADToolkit.cmd`.
+
+| Option | Command |
+| --- | --- |
+| User details | `Get-ADUser -Filter ... -Properties *` |
+| Group members | `Get-ADGroup` + `Get-ADGroupMember [-Recursive]` |
+| Network test | `Test-NetConnection -ComputerName <host> [-Port <port>]` |
+| Change password | `Set-ADAccountPassword -OldPassword ... -NewPassword ...` (uses the current password, no reset rights needed) |
+
+- Needs the ActiveDirectory module (RSAT) for the AD options; Test-NetConnection works without it.
+- Optional domain controller (`-Server`) and **Run as...** (`-Credential`); credentials are kept in memory only.
+- Results can be filtered, copied or exported to CSV. The executed command is shown above the results; passwords are never shown.
+
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `RDPManager.ps1` | The application |
-| `Launch-RDPManager.cmd` | Launcher |
+| `RDPManager.ps1` | RDP Connection Manager |
+| `Launch-RDPManager.cmd` | Launcher for the RDP Connection Manager |
 | `savedconnections.xml` | Your saved connections (CLIXML, schema v2) |
+| `ADToolkit.ps1` | AD Toolkit |
+| `Launch-ADToolkit.cmd` | Launcher for the AD Toolkit |
 
 ## Notes
 
